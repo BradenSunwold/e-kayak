@@ -45,8 +45,6 @@ static QueueHandle_t imuDataQueue;
 static QueueHandle_t kayakStatusQueue;
 static QueueHandle_t buttonQueue;
 static QueueHandle_t currentStateQueue;
-static QueueHandle_t ledAnnimationQueue;
-static QueueHandle_t oarBatteryQueue; 
 static QueueHandle_t rfOutMsgQueue;
 static QueueHandle_t ledPixelMapQueue;
 
@@ -61,24 +59,6 @@ typedef enum
   eUnknownFault,
   eFaultCleared
 } StatusType_t;
-
-typedef enum
-{
-  eConnecting,
-  eConnected,
-  eModeUpdate,
-  eSpeedUpdate, 
-  eBatteryUpdate,
-  eError
-} LedAnnimateType_t;
-
-typedef struct
-{
-  LedAnnimateType_t fAnnimation;
-  uint32_t fColor;
-  int fDelay;
-  uint32_t fData;
-} LedMsg_t;
 
 typedef struct 
 {
@@ -125,11 +105,6 @@ typedef struct
 } RfOutputMsg_t;
 
 
-void CirclingAnnimation(uint32_t color, int wait);
-void PulseAnnimation(uint32_t color, int wait);
-void BatteryUpdateAnnimation(uint32_t newBatteryPercentage);
-void StartupAnnimation(int wait);
-void SpeedUpdateAnnimation(uint32_t newSpeed);
 
 //######################** Support functions ****************************//
 void SetImuReports()
@@ -183,10 +158,8 @@ TaskHandle_t Handle_RfInputTask;
 TaskHandle_t Handle_ImuInputTask;
 TaskHandle_t Handle_KayakStatusManagerTask;
 TaskHandle_t Handle_ProcessOutputsTask;
-TaskHandle_t Handle_LedDriverTask;
 TaskHandle_t Handle_ButtonInputTask;
 TaskHandle_t Handle_StateManagerTask;
-TaskHandle_t Handle_OarBatteryMonitorTask;
 TaskHandle_t Handle_RfOutputTask;
 TaskHandle_t Handle_LedPixelUpdaterTask;
 
@@ -210,6 +183,8 @@ void myDelayMsUntil(TickType_t *previousWakeTime, int ms)
   vTaskDelayUntil( previousWakeTime, (ms * 1000) / portTICK_PERIOD_US );  
 }
 
+volatile UBaseType_t uxHighWaterMark;
+
 // RF input task
 static void RfInputTask( void *pvParameters ) 
 {
@@ -230,8 +205,11 @@ static void RfInputTask( void *pvParameters )
 
       // Store relevant data to queue
       xQueueSend(rfInMsgQueue, (void *)&incomingData, 1);
-
     }
+    
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+
     // beginTime = millis();
     count = 0;
     myDelayMs(50);    // execute task at 20Hz
@@ -293,6 +271,9 @@ static void ImuInputTask( void *pvParameters )
       xQueueSend(imuDataQueue, (void*)&fullImuDataSet, 1);
     }
     
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+
     // beginTime = millis();
     count = 0;
     myDelayMs(50);    // execute task at 20Hz
@@ -370,6 +351,9 @@ static void ButtonInputTask( void *pvParameters )
       buttonReport = 0;
     }
 
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+
     // beginTime = millis();
     myDelayMs(50);   // execute task at 20Hz
     // taskTime = millis() - beginTime;
@@ -388,7 +372,7 @@ static void KayakStsManagerTask( void *pvParameters )
   xQueueSend(kayakStatusQueue, (void *)&rfReceiverMsg, 1);
 
   unsigned long lastReceivedMsg = 0;
-  unsigned long comsReconnectTime = 3000;     // If lose signal for 2 seconds, signal re connecting annimation
+  unsigned long comsReconnectTime = 3000;     // If lose signal for 3 seconds, signal re connecting annimation
   unsigned long comsErrorTime = 8000;         // 8 seconds till hard fault unless re-connects
 
   bool startupFlag = true;
@@ -409,8 +393,9 @@ static void KayakStsManagerTask( void *pvParameters )
     // If have not recieved message within X seconds - signal coms loss 
     else if((millis() - lastReceivedMsg) > comsReconnectTime)
     {
-      if(startupFlag)
+      if(startupFlag) 
       {
+        // Keep sending startup message (triggers connecting annimation) until faulted
         rfReceiverMsg.fStatusType = eStartup;
         xQueueSend(kayakStatusQueue, (void *)&rfReceiverMsg, 1);
         startupFlag = false;
@@ -423,6 +408,9 @@ static void KayakStsManagerTask( void *pvParameters )
       }
     }
 
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+
     // beginTime = millis();
     myDelayMs(50);    // execute task at 20Hz
     // taskTime = millis() - beginTime;
@@ -431,31 +419,6 @@ static void KayakStsManagerTask( void *pvParameters )
 
   Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
-}
-
-static void OarBatteryMonitorTask( void *pvParameters ) 
-{
-
-  while(1)
-  {
-    // Read battery pin 
-    float batteryVoltage = analogRead(VBATPIN);
-    batteryVoltage *= 2;        // Account for voltage divider
-    batteryVoltage *= 3.3;      // Multiply by 3.3V - reference voltage
-    batteryVoltage /= 1024;     // convert to voltage
-    // Serial.print("VBat: " ); Serial.println(batteryVoltage);
-
-    // Send to output processor
-    xQueueSend(oarBatteryQueue, (void *)&batteryVoltage, 1);
-
-    // beginTime = millis();
-    myDelayMs(1000);    // Execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
-  }
-
-  Serial.println("Task Monitor: Deleting");
-  vTaskDelete( NULL );  
 }
 
 static void StateManagerTask( void *pvParameters )
@@ -494,6 +457,9 @@ static void StateManagerTask( void *pvParameters )
       xQueueSend(currentStateQueue, (void *)&currState, 1);
     }
 
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+
     // beginTime = millis();
     myDelayMs(50);    // execute task at 20Hz
     // taskTime = millis() - beginTime;
@@ -507,18 +473,19 @@ static void StateManagerTask( void *pvParameters )
 static void ProcessOutputsTask( void *pvParameters ) 
 {
   bool fault = false;
-  bool faultCleared = false;
   bool startup = true;
+  bool startupConnected = false;
 
   bool autoMode = false;
   uint32_t speed = 0;
 
   StatusMsg_t kayakStatusMsg;
   StateMsg_t stateMsg;
-  LedMsg_t ledMsg;
+  LedMap_t ledMsg;
 
   float kayakBatteryVolt = 26;
   float oarbatteryVolt = 4.2;
+  uint32_t batteryPercentageReport = 100;
 
   const TickType_t xTicksToWait = 5 / portTICK_PERIOD_MS;
 
@@ -536,54 +503,56 @@ static void ProcessOutputsTask( void *pvParameters )
         case eComsLoss :
         case eUnknownFault :
           // faults take priority
-          ledMsg.fAnnimation = eError;
-          ledMsg.fColor = strip.Color(255, 0, 0);
-          ledMsg.fDelay = 5;
+          Serial.println("FAULT");
+          LoadErrorAnnimation(ledMsg);  // Set pixel map
 
           // Add to led queue
-          // Serial.println("Faulted");
-          xQueueSend(ledAnnimationQueue, (void *)&ledMsg, 1);
+          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+          fault = true;
           break;
 
         // Then check for fault cleared
         case eFaultCleared :
-          ledMsg.fAnnimation = eConnected;
-          ledMsg.fColor = strip.Color(0, 255, 0);
-          ledMsg.fDelay = 5;
+          LoadConnectedAnnimation(ledMsg);  // Set pixel map
 
           // Add to led queue
-          // Serial.println("Fault Cleared");
-          xQueueSend(ledAnnimationQueue, (void *)&ledMsg, 1);
+          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+          fault = false;
           break;
 
         // Then check for battery status
         case eBatteryVolt :
           // Package kayak battery voltage for output processor
           kayakBatteryVolt = kayakStatusMsg.fStatusData;
-          if(startup == true)
+          if(startup)
           {
-            // Send eConnected annimation
-            ledMsg.fAnnimation = eConnected;
-            ledMsg.fColor = strip.Color(0, 255, 0);
-            ledMsg.fDelay = 5;
+            if(!startupConnected)
+            {
+              // First load connnected annimation before startup annimation
+              LoadConnectedAnnimation(ledMsg);
 
-            // Add to led queue
-            // Serial.println("Connected");
-            xQueueSend(ledAnnimationQueue, (void *)&ledMsg, 1);
-            startup = false;    // Signal output processor that startup is over
+              xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+              startupConnected = true;
+            }
+            else
+            {
+              // Now load startup annimation after connected annimation
+              LoadStartupAnnimation(ledMsg);
+
+              xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+              startup = false;    // Signal output processor that startup is over
+
+            }
+
           }
           break;
         
         case eStartup :
           startup = true;
-          // Send eConnecting annimation
-          ledMsg.fAnnimation = eConnecting;
-          ledMsg.fColor = strip.Color(0, 255, 0);
-          ledMsg.fDelay = 50;
+          LoadConnectingAnnimation(ledMsg);
 
           // Add to led queue
-          // Serial.println("Startup");
-          xQueueSend(ledAnnimationQueue, (void *)&ledMsg, 1);
+          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
           break;
 
         default :
@@ -597,75 +566,70 @@ static void ProcessOutputsTask( void *pvParameters )
     {
       if((stateMsg.fAutoMode && !autoMode) || (!stateMsg.fAutoMode && autoMode))
       {
-        // Report state change to LED driver
-        ledMsg.fAnnimation = eModeUpdate;
-        ledMsg.fColor = strip.Color(120, 120, 255);
-        ledMsg.fDelay = 5;
-
         // Toggle autoMode
         autoMode = stateMsg.fAutoMode;
-        // Serial.println(autoMode);
 
-        // Add to queue
-        Serial.println("State Change");
-        xQueueSend(ledAnnimationQueue, (void *)&ledMsg, 1);
-        xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
+        if(!fault)
+        {
+          // Only report to LED driver / RF output if we arn't currently faulted
+          LoadModeChangeAnnimation(ledMsg);
+          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+          xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
+        }
+
       }
       else if(stateMsg.fSpeed != speed)
       {
-        // Package current speed and send to LED driver
-        ledMsg.fAnnimation = eSpeedUpdate;
-        ledMsg.fColor = strip.Color(120, 120, 255);
-        ledMsg.fData = stateMsg.fSpeed;
-        speed = stateMsg.fSpeed;    // Update local speed checker variable
-        // Serial.println(speed);
-
-        // Add to queues
-        Serial.println("Speed change");
-        xQueueSend(ledAnnimationQueue, (void *)&ledMsg, 1);
+        speed = stateMsg.fSpeed;                            // Update local speed checker variable
         xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
       }
     }
 
-    // Finally read oar battery
-    if(xQueueReceive(oarBatteryQueue, (void *)&oarbatteryVolt, 0) == pdTRUE)
+    // Finally read the batteries
+    float oarBatteryVoltage = analogRead(VBATPIN);
+    oarBatteryVoltage *= 2;        // Account for voltage divider
+    oarBatteryVoltage *= 3.3;      // Multiply by 3.3V - reference voltage
+    oarBatteryVoltage /= 1024;     // convert to voltage
+
+    // Normalize battery voltages between 0 - 100% - equation based on voltage curves
+    float kayakBatteryPercentage = (2.37 * (kayakBatteryVolt * kayakBatteryVolt)) - (87.33 * kayakBatteryVolt) + 802.79;
+    if(kayakBatteryPercentage > 100)
     {
-      // Normalize battery voltages between 0 - 100% - equation based on voltage curves
-      float kayakBatteryPercentage = (2.37 * (kayakBatteryVolt * kayakBatteryVolt)) - (87.33 * kayakBatteryVolt) + 802.79;
-      if(kayakBatteryPercentage > 100)
-      {
-        kayakBatteryPercentage = 100;
-      }
-      else if(kayakBatteryPercentage < 0)
-      {
-        kayakBatteryPercentage = 0;
-      }
-
-      float oarBatteryPercentage = (-114.3 * (oarbatteryVolt * oarbatteryVolt)) + (959.22 * oarbatteryVolt) - 1909.5;
-      if(oarBatteryPercentage > 100)
-      {
-        oarBatteryPercentage = 100;
-      }
-      else if (oarBatteryPercentage < 0)
-      {
-        oarBatteryPercentage = 0;
-      }
-
-      uint32_t batteryPercentageReport;
-      if(kayakBatteryPercentage > oarBatteryPercentage)
-      {
-        batteryPercentageReport = (uint32_t) oarBatteryPercentage;
-      }
-      else
-      {
-        batteryPercentageReport = (uint32_t) kayakBatteryPercentage;
-      }
-
-      // Add battery voltage to queue
-      ledMsg.fAnnimation = eBatteryUpdate;
-      ledMsg.fData = batteryPercentageReport;
-      xQueueSend(ledAnnimationQueue, (void *)&ledMsg, 1);
+      kayakBatteryPercentage = 100;
     }
+    else if(kayakBatteryPercentage < 0)
+    {
+      kayakBatteryPercentage = 0;
+    }
+
+    float oarBatteryPercentage = (-114.3 * (oarBatteryVoltage * oarBatteryVoltage)) + (959.22 * oarBatteryVoltage) - 1909.5;
+    if(oarBatteryPercentage > 100)
+    {
+      oarBatteryPercentage = 100;
+    }
+    else if (oarBatteryPercentage < 0)
+    {
+      oarBatteryPercentage = 0;
+    }
+
+    if(kayakBatteryPercentage > oarBatteryPercentage)
+    {
+      batteryPercentageReport = (uint32_t) oarBatteryPercentage;
+    }
+    else
+    {
+      batteryPercentageReport = (uint32_t) kayakBatteryPercentage;
+    }
+
+    if(!fault)
+    {
+      LoadGaugeUpdateAnnimation(ledMsg, speed, batteryPercentageReport);
+
+      // xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+    }
+
+    uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    Serial.println(uxHighWaterMark);
 
     // Serial.println(currTime - prevTime);
     // beginTime = millis();
@@ -678,160 +642,15 @@ static void ProcessOutputsTask( void *pvParameters )
   vTaskDelete( NULL );
 }
 
-static void LedDriverTask( void *pvParameters )
-{
-  LedMsg_t annimateMsg;  
-  bool fault = false;
-  bool connecting = true;
-  uint32_t faultColor = strip.Color(255, 0, 0);
-  int faultDelay = 6;
-
-  bool autoMode = false;
-  uint32_t speed = 0;
-  uint32_t batteryPercent = 100;
-
-  while(1)
-  {    
-    int faultCount = 0;
-    // If faulted - loop until fault clears 
-    while(fault)
-    {
-      if(faultCount % 40 == 0)
-      {
-        PulseAnnimation(faultColor, faultDelay);
-      }
-
-      // pop from queue until we get a connected annimation msg meaning the fault has cleared
-      if(xQueueReceive(ledAnnimationQueue, (void *)&annimateMsg, 0) == pdTRUE)
-      {
-        // Serial.println(annimateMsg.fAnnimation);
-        if(annimateMsg.fAnnimation == eConnected)
-        {
-          PulseAnnimation(annimateMsg.fColor, annimateMsg.fDelay);
-          StartupAnnimation(50);
-          fault = false;
-        }
-      }
-      faultCount++;
-
-      beginTime = millis();
-      myDelayMs(500);
-      taskTime = millis() - beginTime;
-      Serial.println(taskTime);
-    }
-
-    while(connecting)
-    {
-      CirclingAnnimation(strip.Color(0, 255, 0), 50);
-
-      // pop from queue until we get a connected or fault annimation msg meaning the fault has 
-      if(xQueueReceive(ledAnnimationQueue, (void *)&annimateMsg, 0) == pdTRUE)
-      {
-        // Serial.println(annimateMsg.fAnnimation);
-        if(annimateMsg.fAnnimation == eConnected)
-        {
-          PulseAnnimation(annimateMsg.fColor, annimateMsg.fDelay);
-          StartupAnnimation(50);
-          connecting = false;
-          fault = false;
-        }
-        else if(annimateMsg.fAnnimation == eError)
-        {
-          connecting = false;
-          fault = true;
-        }
-      }
-
-      beginTime = millis();
-      myDelayMs(500);
-      taskTime = millis() - beginTime;
-      Serial.println(taskTime);
-    }
-
-    // Read from annimation queue
-    if(xQueueReceive(ledAnnimationQueue, (void *)&annimateMsg, 0) == pdTRUE)
-    {
-      // Serial.println(annimateMsg.fAnnimation);
-
-      switch(annimateMsg.fAnnimation)
-      {
-        case eError :
-          fault = true;
-          connecting = false;
-          break;
-        case eConnecting :
-          // Call circle annimate
-          connecting = true;
-          CirclingAnnimation(annimateMsg.fColor, annimateMsg.fDelay);
-          break;
-        // case eConnected :
-        //   // Call flash annimate 
-        //   connecting = false;
-        //   PulseAnnimation(annimateMsg.fColor, annimateMsg.fDelay);
-        //   StartupAnnimation(50);
-        //   break;
-        case eModeUpdate :
-          // Call flash update twice
-          autoMode != autoMode;
-          PulseAnnimation(annimateMsg.fColor, annimateMsg.fDelay);
-          PulseAnnimation(annimateMsg.fColor, annimateMsg.fDelay);
-          SpeedUpdateAnnimation(speed);
-          BatteryUpdateAnnimation(batteryPercent);
-          break;
-        case eSpeedUpdate :
-          // Call speed annimate
-          speed = annimateMsg.fData;
-          SpeedUpdateAnnimation(speed);
-          break;
-        case eBatteryUpdate :
-          // Call battery annimate
-          batteryPercent = annimateMsg.fData;
-          BatteryUpdateAnnimation(batteryPercent);
-          break;
-        default :
-          break;
-      }
-    }
-    myDelayMs(30);   // execute task at 60Hz
-  }
-
-  Serial.println("Task Monitor: Deleting");
-  vTaskDelete( NULL );
-}
-
 static void LedPixelUpdaterTask( void *pvParameters )
 {
   // Pixel map
   LedMap_t pixelMap;
 
   // Set default pixel map to connecting annimation sequence
-  // memcpy(&pixelMap.fPixelColor[0][0], &connectSequenceZero, sizeof(connectSequenceZero));
-  // memcpy(&pixelMap.fPixelColor[1][0], &connectSequenceOne, sizeof(connectSequenceOne));
-  // memcpy(&pixelMap.fPixelColor[2][0], &connectSequenceTwo, sizeof(connectSequenceTwo));
-  // memcpy(&pixelMap.fPixelColor[3][0], &connectSequenceThree, sizeof(connectSequenceThree));
-  // memcpy(&pixelMap.fPixelColor[4][0], &connectSequenceFour, sizeof(connectSequenceFour));
-  // memcpy(&pixelMap.fPixelColor[5][0], &connectSequenceFive, sizeof(connectSequenceFive));
-  // memcpy(&pixelMap.fPixelColor[6][0], &connectSequenceSix, sizeof(connectSequenceSix));
-  // memcpy(&pixelMap.fPixelColor[7][0], &connectSequenceSeven, sizeof(connectSequenceSeven));
-  // memcpy(&pixelMap.fPixelColor[8][0], &connectSequenceEight, sizeof(connectSequenceEight));
-  // memcpy(&pixelMap.fPixelColor[9][0], &connectSequenceNine, sizeof(connectSequenceNine));
-  // memcpy(&pixelMap.fPixelColor[10][0], &connectSequenceTen, sizeof(connectSequenceTen));
-  // memcpy(&pixelMap.fPixelColor[11][0], &connectSequenceEleven, sizeof(connectSequenceEleven));
+  LoadConnectingAnnimation(pixelMap);
 
-  memcpy(&pixelMap.fPixelColor[0][0], &connectedSequenceZero, sizeof(connectedSequenceZero));
-  memcpy(&pixelMap.fPixelColor[1][0], &connectedSequenceOne, sizeof(connectedSequenceOne));
-  memcpy(&pixelMap.fPixelColor[2][0], &connectedSequenceTwo, sizeof(connectedSequenceTwo));
-  memcpy(&pixelMap.fPixelColor[3][0], &connectedSequenceThree, sizeof(connectedSequenceThree));
-  memcpy(&pixelMap.fPixelColor[4][0], &connectedSequenceFour, sizeof(connectedSequenceFour));
-  memcpy(&pixelMap.fPixelColor[5][0], &connectedSequenceFive, sizeof(connectedSequenceFive));
-  memcpy(&pixelMap.fPixelColor[6][0], &connectedSequenceSix, sizeof(connectedSequenceSix));
-  memcpy(&pixelMap.fPixelColor[7][0], &connectedSequenceSeven, sizeof(connectedSequenceSeven));
-  memcpy(&pixelMap.fPixelColor[8][0], &connectedSequenceEight, sizeof(connectedSequenceEight));
-  memcpy(&pixelMap.fPixelColor[9][0], &connectedSequenceNine, sizeof(connectedSequenceNine));
-  memcpy(&pixelMap.fPixelColor[10][0], &connectedSequenceTen, sizeof(connectedSequenceTen));
-  memcpy(&pixelMap.fPixelColor[11][0], &connectedSequenceEleven, sizeof(connectedSequenceEleven));
-
-  pixelMap.fDelay = 75;
+  pixelMap.fDelay = 50;
   pixelMap.fNumCyclesBlock = 0;
 
   volatile int delayCount = 0;    // Counter to track annimation delay times
@@ -884,9 +703,12 @@ static void LedPixelUpdaterTask( void *pvParameters )
       cycleCount++;
     }
 
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+
     delayCount++;
     count = 0;
-    myDelayMs(10);    // Execute task at 100Hz
+    myDelayMs(taskDelay);    // Execute task at 100Hz
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -935,6 +757,9 @@ static void RfOutputTask( void *pvParameters )
     //   Serial.println(F("Transmission failed or timed out"));  // payload was not delivered
     // }
 
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+    
     count = 0;
     myDelayMs(50);   // execute task at 20Hz
   }
@@ -990,22 +815,18 @@ void setup()
   kayakStatusQueue = xQueueCreate(msgQueueLength, sizeof(StatusMsg_t));
   buttonQueue = xQueueCreate(msgQueueLength, sizeof(uint8_t));
   currentStateQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
-  ledAnnimationQueue = xQueueCreate(msgQueueLength * 3, sizeof(LedMsg_t));
-  oarBatteryQueue = xQueueCreate(msgQueueLength * 3, sizeof(float));
   rfOutMsgQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Create tasks
-  xTaskCreate(RfInputTask, "RF In", 256, NULL, tskIDLE_PRIORITY + 2, &Handle_RfInputTask);
-  xTaskCreate(ImuInputTask, "IMU In", 256, NULL, tskIDLE_PRIORITY + 3, &Handle_RfInputTask);
-  // xTaskCreate(ButtonInputTask, "Button In",  256, NULL, tskIDLE_PRIORITY + 4, &Handle_ButtonInputTask);
-  // xTaskCreate(KayakStsManagerTask, "Kayak Status", 256, NULL, tskIDLE_PRIORITY + 5, &Handle_KayakStatusManagerTask);
-  // xTaskCreate(StateManagerTask, "Kayak State", 256, NULL, tskIDLE_PRIORITY + 6, &Handle_StateManagerTask);
-  // xTaskCreate(ProcessOutputsTask, "Process Outputs", 256, NULL, tskIDLE_PRIORITY + 7, &Handle_ProcessOutputsTask);
-  // // xTaskCreate(LedDriverTask, "LED Driver", 256, NULL, tskIDLE_PRIORITY + 1, &Handle_LedDriverTask);
-  // xTaskCreate(OarBatteryMonitorTask, "Battery Monitor", 256, NULL, tskIDLE_PRIORITY + 9, &Handle_OarBatteryMonitorTask);
-  // xTaskCreate(RfOutputTask, "RF Out", 256, NULL, tskIDLE_PRIORITY + 8, &Handle_RfOutputTask);
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 512, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTask);
+  xTaskCreate(RfInputTask, "RF In", 84, NULL, tskIDLE_PRIORITY + 4, &Handle_RfInputTask);
+  xTaskCreate(ImuInputTask, "IMU In", 184, NULL, tskIDLE_PRIORITY + 2, &Handle_RfInputTask);
+  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 5, &Handle_ButtonInputTask);
+  xTaskCreate(KayakStsManagerTask, "Kayak Status", 80, NULL, tskIDLE_PRIORITY + 6, &Handle_KayakStatusManagerTask);   
+  xTaskCreate(StateManagerTask, "Kayak State", 80, NULL, tskIDLE_PRIORITY + 7, &Handle_StateManagerTask);
+  xTaskCreate(ProcessOutputsTask, "Process Outputs", 236, NULL, tskIDLE_PRIORITY + 8, &Handle_ProcessOutputsTask);
+  xTaskCreate(RfOutputTask, "RF Out", 112, NULL, tskIDLE_PRIORITY + 5, &Handle_RfOutputTask);
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 244, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTask);
 
   Serial.println("");
   Serial.println("******************************");
@@ -1030,172 +851,94 @@ void setup()
 void loop() 
 {
   // put your main code here, to run repeatedly:
-  Serial.println(count);
+  // Serial.println(count);
   count++;
 }
 
-// Support functions
-void CirclingAnnimation(uint32_t color, int wait) 
+// Support annimation functions
+void LoadConnectingAnnimation(LedMap_t &pixelMap)
 {
+  // for(int i = 0; i < strip.numPixel(); i++)
+  // {
+  //   for()
+  //   {
+  //     pixelMap.fPixelColor[i][j] = strip.Color(0, 255, 0);
+  //   }
+  // }
 
-  // Initialize first three pixels on
-  strip.setPixelColor(0, color); 
-  strip.setPixelColor(1, color);
-  strip.setPixelColor(2, color);            
+  memcpy(&pixelMap.fPixelColor[0][0], &connectSequenceZero, sizeof(connectSequenceZero));
+  memcpy(&pixelMap.fPixelColor[1][0], &connectSequenceOne, sizeof(connectSequenceOne));
+  memcpy(&pixelMap.fPixelColor[2][0], &connectSequenceTwo, sizeof(connectSequenceTwo));
+  memcpy(&pixelMap.fPixelColor[3][0], &connectSequenceThree, sizeof(connectSequenceThree));
+  memcpy(&pixelMap.fPixelColor[4][0], &connectSequenceFour, sizeof(connectSequenceFour));
+  memcpy(&pixelMap.fPixelColor[5][0], &connectSequenceFive, sizeof(connectSequenceFive));
+  memcpy(&pixelMap.fPixelColor[6][0], &connectSequenceSix, sizeof(connectSequenceSix));
+  memcpy(&pixelMap.fPixelColor[7][0], &connectSequenceSeven, sizeof(connectSequenceSeven));
+  memcpy(&pixelMap.fPixelColor[8][0], &connectSequenceEight, sizeof(connectSequenceEight));
+  memcpy(&pixelMap.fPixelColor[9][0], &connectSequenceNine, sizeof(connectSequenceNine));
+  memcpy(&pixelMap.fPixelColor[10][0], &connectSequenceTen, sizeof(connectSequenceTen));
+  memcpy(&pixelMap.fPixelColor[11][0], &connectSequenceEleven, sizeof(connectSequenceEleven));
 
-  for(int i=0; i<strip.numPixels(); i++) {      
-    // Turn off first of three pixels
-    strip.setPixelColor(i, strip.Color(0, 0, 0));             
-
-    // Turn on next pixel in set of three
-    if(i > strip.numPixels() - 4)
-    {
-      // Wrap around case (i = 9)
-      int j = i + 3;
-      if(j >= strip.numPixels())
-      {
-        j = j - strip.numPixels();
-      }
-      strip.setPixelColor(j, color);
-    }
-    else
-    {
-      strip.setPixelColor(i+3, color);
-    }
-    strip.show();                               //  Update strip to match
-    myDelayMs(wait);                            //  Pause for a moment
-  }
 }
 
-void PulseAnnimation(uint32_t color, int wait)
+void LoadConnectedAnnimation(LedMap_t &pixelMap)
 {
-  uint8_t largestColorValue = 0;
-  uint8_t red = (color >> 16) & 0xFF;
-  uint8_t green = (color >> 8) & 0xFF;
-  uint8_t blue = color & 0xFF;
-
-  if(red > largestColorValue)
-  {
-    largestColorValue = red;
-  }
-  if(green > largestColorValue)
-  {
-    largestColorValue = green;
-  }
-  if(blue > largestColorValue)
-  {
-    largestColorValue = blue;
-  }
-
-  uint8_t leastCommonMultipleRed = red / largestColorValue;     
-  uint8_t leastCommonMultipleGreen = green / largestColorValue;
-  uint8_t leastCommonMultipleBlue = blue / largestColorValue;
-
-  // Fade all pixels into chosen color
-  for(int i = 0; i < largestColorValue / 4; i++)
-  {
-    uint32_t colorAnnimate = strip.Color((i * (leastCommonMultipleRed * 2)), (i * (leastCommonMultipleGreen * 2)), (i * (leastCommonMultipleBlue * 2)));
-    strip.fill(colorAnnimate);
-    strip.show();
-    myDelayMs(wait);
-  }
-
-  // Turn all LEDs back to off
-  for(int i = largestColorValue / 4; i >= 0; i--)
-  {
-    uint32_t colorAnnimate = strip.Color((i * (leastCommonMultipleRed * 2)), (i * (leastCommonMultipleGreen * 2)), (i * (leastCommonMultipleBlue* 2)));
-    strip.fill(colorAnnimate);
-    strip.show();
-    myDelayMs(wait);  
-  }
+  memcpy(&pixelMap.fPixelColor[0][0], &connectedSequenceZero, sizeof(connectedSequenceZero));
+  memcpy(&pixelMap.fPixelColor[1][0], &connectedSequenceOne, sizeof(connectedSequenceOne));
+  memcpy(&pixelMap.fPixelColor[2][0], &connectedSequenceTwo, sizeof(connectedSequenceTwo));
+  memcpy(&pixelMap.fPixelColor[3][0], &connectedSequenceThree, sizeof(connectedSequenceThree));
+  memcpy(&pixelMap.fPixelColor[4][0], &connectedSequenceFour, sizeof(connectedSequenceFour));
+  memcpy(&pixelMap.fPixelColor[5][0], &connectedSequenceFive, sizeof(connectedSequenceFive));
+  memcpy(&pixelMap.fPixelColor[6][0], &connectedSequenceSix, sizeof(connectedSequenceSix));
+  memcpy(&pixelMap.fPixelColor[7][0], &connectedSequenceSeven, sizeof(connectedSequenceSeven));
+  memcpy(&pixelMap.fPixelColor[8][0], &connectedSequenceEight, sizeof(connectedSequenceEight));
+  memcpy(&pixelMap.fPixelColor[9][0], &connectedSequenceNine, sizeof(connectedSequenceNine));
+  memcpy(&pixelMap.fPixelColor[10][0], &connectedSequenceTen, sizeof(connectedSequenceTen));
+  memcpy(&pixelMap.fPixelColor[11][0], &connectedSequenceEleven, sizeof(connectedSequenceEleven));
 }
 
-void StartupAnnimation(int wait)
+void LoadErrorAnnimation(LedMap_t &pixelMap)
 {
-  
-  uint32_t batteryColorIndex[] = {strip.Color(255, 0, 0), strip.Color(255, 50, 0), strip.Color(255, 170, 0), strip.Color(200, 255, 0),
-                                          strip.Color(75, 255, 0), strip.Color(0, 255, 0)};
-  // Clear color
-  strip.fill(strip.Color(0, 0, 0));
-  strip.show();
-
-  // Startup annimation will be ramp up on each half circle of pixel ring
-  for(int i = 0; i < (strip.numPixels() / 2); i++)
-  {
-    // 6 pixels on each side - Speed side want all green / Battery side want red, orange, yellow, yellow, green, green ?
-    
-    // Set speed side
-    strip.setPixelColor(i, strip.Color(120, 120, 255)); 
-
-    // Set battery side
-    strip.setPixelColor(strip.numPixels() - i - 1, batteryColorIndex[i]);
-
-    strip.show();
-    myDelayMs(wait);
-  }
-
-  // Ramp speed half back down since not yet moving
-  for(int i = (strip.numPixels() / 2) - 1; i >= 0; i--)
-  {
-    strip.setPixelColor(i, strip.Color(0, 0, 0)); 
-
-    strip.show();
-    myDelayMs(wait);
-  }
+  memcpy(&pixelMap.fPixelColor[0][0], &errorSequenceZero, sizeof(errorSequenceZero));
+  memcpy(&pixelMap.fPixelColor[1][0], &errorSequenceOne, sizeof(errorSequenceOne));
+  memcpy(&pixelMap.fPixelColor[2][0], &errorSequenceTwo, sizeof(errorSequenceTwo));
+  memcpy(&pixelMap.fPixelColor[3][0], &errorSequenceThree, sizeof(errorSequenceThree));
+  memcpy(&pixelMap.fPixelColor[4][0], &errorSequenceFour, sizeof(errorSequenceFour));
+  memcpy(&pixelMap.fPixelColor[5][0], &errorSequenceFive, sizeof(errorSequenceFive));
+  memcpy(&pixelMap.fPixelColor[6][0], &errorSequenceSix, sizeof(errorSequenceSix));
+  memcpy(&pixelMap.fPixelColor[7][0], &errorSequenceSeven, sizeof(errorSequenceSeven));
+  memcpy(&pixelMap.fPixelColor[8][0], &errorSequenceEight, sizeof(errorSequenceEight));
+  memcpy(&pixelMap.fPixelColor[9][0], &errorSequenceNine, sizeof(errorSequenceNine));
+  memcpy(&pixelMap.fPixelColor[10][0], &errorSequenceTen, sizeof(errorSequenceTen));
+  memcpy(&pixelMap.fPixelColor[11][0], &errorSequenceEleven, sizeof(errorSequenceEleven));
 }
 
-void BatteryUpdateAnnimation(uint32_t newBatteryPercentage)
+void LoadStartupAnnimation(LedMap_t &pixelMap)
 {
-  // Set battery LED index
-  uint32_t batteryColorIndex[] = {strip.Color(255, 0, 0), strip.Color(255, 50, 0), strip.Color(255, 170, 0), strip.Color(200, 255, 0),
-                                          strip.Color(75, 255, 0), strip.Color(0, 255, 0)};
 
-  // 100% battery / 6 LEDs = 16.666 percent per LED
-  float numLeds = round(newBatteryPercentage / (100.0 / ((float)strip.numPixels() / 2.0)));
-
-  // Set / turn off LED colors
-  for(int i = 0; i < (strip.numPixels() / 2); i++)
-  {
-    if (i < numLeds)
-    {
-      strip.setPixelColor(strip.numPixels() - i - 1, batteryColorIndex[i]);   // Turn on used LEDs
-    }
-    else
-    {
-      strip.setPixelColor(strip.numPixels() - i - 1, strip.Color(0, 0, 0));   // Turn off unused LEDs
-    }
-  }
-
-  // Enable new LED sequence
-  strip.show();
 }
 
-void SpeedUpdateAnnimation(uint32_t newSpeed)
+void LoadModeChangeAnnimation(LedMap_t &pixelMap)
 {
-  uint32_t speedColor = strip.Color(120, 120, 255); 
 
-  // 6 LEDs / 3 speed states = 2
-  int ledMultiplier = round((strip.numPixels() / 2) / 3);
-
-  if(newSpeed == 0)
-  {
-    // Turn off all LEDs
-    for(int i = 0; i < 6; i++)
-    {
-      strip.setPixelColor(i, strip.Color(0, 0, 0));
-    }
-  }
-  else
-  {
-    // Set LED colors
-    for(int i = 0; i < (newSpeed * ledMultiplier); i++)
-    {
-      // What happens if newSpeed = 0 so i = 0 (is 0 < 0)?
-      strip.setPixelColor(i, speedColor); 
-    }
-  }
-  strip.show();
 }
+
+void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, float speed, float batteryPercentage)
+{
+
+}
+
+
+
+
+
+// Impliment all annimations
+
+// During fault / connecting do not take any new button readings / Also ignore battery updates?
+
+// Time all tasks
+
+
 
 
 

@@ -14,43 +14,42 @@ typedef struct
 
 
 // /****************************    CONNECTING ANNIMATION   ***********************************/
-// uint32_t connectSequenceZero[12] = {strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceOne[12] = {strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceTwo[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceThree[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0),
-//                               strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceFour[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0),
-//                               strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceFive[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceSix[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceSeven[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceEight[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0),
-//                               strip.Color(0, 255, 0), strip.Color(0, 0, 0)};
-// uint32_t connectSequenceNine[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0),
-//                               strip.Color(0, 255, 0), strip.Color(0, 255, 0)};                             
-// uint32_t connectSequenceTen[12] = {strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 255, 0), strip.Color(0, 255, 0)};    
-// uint32_t connectSequenceEleven[12] = {strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
-//                               strip.Color(0, 0, 0), strip.Color(0, 255, 0)};    
-
+uint32_t connectSequenceZero[12] = {strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceOne[12] = {strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceTwo[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceThree[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0),
+                              strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceFour[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0),
+                              strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceFive[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceSix[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceSeven[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceEight[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0),
+                              strip.Color(0, 255, 0), strip.Color(0, 0, 0)};
+uint32_t connectSequenceNine[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 255, 0),
+                              strip.Color(0, 255, 0), strip.Color(0, 255, 0)};                             
+uint32_t connectSequenceTen[12] = {strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 255, 0), strip.Color(0, 255, 0)};    
+uint32_t connectSequenceEleven[12] = {strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 255, 0)};    
 
 
 
@@ -91,3 +90,43 @@ uint32_t connectedSequenceTen[12] = {strip.Color(0, 84, 0), strip.Color(0, 84, 0
 uint32_t connectedSequenceEleven[12] = {strip.Color(0, 42, 0), strip.Color(0, 42, 0), strip.Color(0, 42, 0), strip.Color(0, 42, 0), strip.Color(0, 42, 0),
                               strip.Color(0, 42, 0), strip.Color(0, 42, 0), strip.Color(0, 42, 0), strip.Color(0, 42, 0), strip.Color(0, 42, 0),
                               strip.Color(0, 42, 0), strip.Color(0, 42, 0)};  
+
+
+
+/****************************    ERROR ANNIMATION   ***********************************/
+uint32_t errorSequenceZero[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t errorSequenceOne[12] = {strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0),
+                              strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0),
+                              strip.Color(42, 0, 0), strip.Color(42, 0, 0)};
+uint32_t errorSequenceTwo[12] = {strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0),
+                              strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0),
+                              strip.Color(84, 0, 0), strip.Color(84, 0, 0)};
+uint32_t errorSequenceThree[12] = {strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0),
+                              strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0),
+                              strip.Color(127, 0, 0), strip.Color(127, 0, 0)};
+uint32_t errorSequenceFour[12] = {strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0),
+                              strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0),
+                              strip.Color(169, 0, 0), strip.Color(169, 0, 0)};
+uint32_t errorSequenceFive[12] = {strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0),
+                              strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0),
+                              strip.Color(211, 0, 0), strip.Color(211, 0, 0)};
+uint32_t errorSequenceSix[12] = {strip.Color(255, 0, 0), strip.Color(255, 0, 0), strip.Color(255, 0, 0), strip.Color(255, 0, 0), strip.Color(255, 0, 0),
+                              strip.Color(255, 0, 0), strip.Color(255, 0, 0), strip.Color(255, 0, 0), strip.Color(255, 0, 0), strip.Color(255, 0, 0),
+                              strip.Color(255, 0, 0), strip.Color(255, 0, 0)};
+uint32_t errorSequenceSeven[12] = {strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0),
+                              strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0), strip.Color(211, 0, 0),
+                              strip.Color(211, 0, 0), strip.Color(211, 0, 0)};
+uint32_t errorSequenceEight[12] = {strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0),
+                              strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0), strip.Color(169, 0, 0),
+                              strip.Color(169, 0, 0), strip.Color(169, 0, 0)};
+uint32_t errorSequenceNine[12] = {strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0),
+                              strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0), strip.Color(127, 0, 0),
+                              strip.Color(127, 0, 0), strip.Color(127, 0, 0)};                          
+uint32_t errorSequenceTen[12] = {strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0),
+                              strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0), strip.Color(84, 0, 0),
+                              strip.Color(84, 0, 0), strip.Color(84, 0, 0)}; 
+uint32_t errorSequenceEleven[12] = {strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0),
+                              strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0),
+                              strip.Color(42, 0, 0), strip.Color(42, 0, 0)};                             

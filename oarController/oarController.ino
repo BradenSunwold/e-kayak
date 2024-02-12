@@ -161,7 +161,8 @@ void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotationalVector, ImuDataType
 //****************************** Tasks **********************************//
 // Task globals
 // Input tasks
-TaskHandle_t Handle_ReadInputsTask;
+TaskHandle_t Handle_ReadRfTask;
+TaskHandle_t Handle_ReadImuTask;
 TaskHandle_t Handle_ProcessOutputsTask;
 TaskHandle_t Handle_ButtonInputTask;
 TaskHandle_t Handle_StateManagerTask;
@@ -191,20 +192,19 @@ void myDelayMsUntil(TickType_t *previousWakeTime, int ms)
 volatile UBaseType_t uxHighWaterMark;
 
 // RF input task
-static void ReadInputsTask( void *pvParameters ) 
+static void ReadRfTask( void *pvParameters ) 
 {
   // Struct to locally store incoming RF data
   StatusMsg_t incomingData;
-
-  sh2_SensorValue_t sensorData;   // local variables to cpature reported data
-  FullImuDataSet_t fullImuDataSet;
 
   radioSemaphore = xSemaphoreCreateMutex();     // Create mutex
   
   while(1)
   {
+    // taskTime = millis() - beginTime;
+    // Serial.println(taskTime);
+    // beginTime = millis();
 
-    ///////////////////////// Read RF //////////////////////////////////////
     if( radioSemaphore != NULL )
     {
       /* See if we can obtain the semaphore.  If the semaphore is not
@@ -230,7 +230,31 @@ static void ReadInputsTask( void *pvParameters )
       }
     }
     
-    //////////////////////// Read IMU ////////////////////////////
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+
+    // beginTime = millis();
+    // count = 0;
+    myDelayMs(100);    // execute task at 20Hz
+    // taskTime = millis() - beginTime;
+    // Serial.println(taskTime);
+  }
+
+  Serial.println("Task Monitor: Deleting");
+  vTaskDelete( NULL );
+}
+
+static void ReadImuTask( void *pvParameters ) 
+{
+  sh2_SensorValue_t sensorData;   // local variables to cpature reported data
+  FullImuDataSet_t fullImuDataSet;
+
+  while(1)
+  {
+    // taskTime = millis() - beginTime;
+    // Serial.println(taskTime);
+    // beginTime = millis();
+
     // Check for IMU reset
     if (bno08x.wasReset()) 
     {
@@ -279,7 +303,7 @@ static void ReadInputsTask( void *pvParameters )
     // taskTime = millis() - beginTime;
     // Serial.println(taskTime);
   }
-
+  
   Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
@@ -448,7 +472,7 @@ static void StateManagerTask( void *pvParameters )
     // Serial.println(uxHighWaterMark);
 
     // beginTime = millis();
-    myDelayMs(50);    // execute task at 20Hz
+    myDelayMs(100);    // execute task at 20Hz
     // taskTime = millis() - beginTime;
     // Serial.println(taskTime);
   }
@@ -621,7 +645,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
     // Serial.println(currTime - prevTime);
     // beginTime = millis();
-    myDelayMs(50);    // execute task at 20Hz
+    myDelayMs(100);    // execute task at 20Hz
     // taskTime = millis() - beginTime;
     // Serial.println(taskTime);
   }
@@ -640,7 +664,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
   volatile int delayCount = 0;    // Counter to track annimation delay times
   volatile int cycleCount = 0;    // Counter to track 12 cycle counter
-  volatile int taskDelay = 10;
+  volatile int taskDelay = 25;
   
   while(1)
   {
@@ -815,12 +839,13 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Create tasks
-  xTaskCreate(ReadInputsTask, "Read in", 182, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadInputsTask);
-  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 3, &Handle_ButtonInputTask);
-  xTaskCreate(StateManagerTask, "Kayak State", 80, NULL, tskIDLE_PRIORITY + 2, &Handle_StateManagerTask);
-  xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 1, &Handle_ProcessOutputsTask);
-  xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 5, &Handle_RfOutputTask);
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 232, NULL, tskIDLE_PRIORITY + 4, &Handle_LedPixelUpdaterTask);
+  xTaskCreate(ReadRfTask, "Read in", 84, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);
+  xTaskCreate(ReadImuTask, "Read in", 178, NULL, tskIDLE_PRIORITY + 7, &Handle_ReadImuTask);
+  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 6, &Handle_ButtonInputTask);
+  xTaskCreate(StateManagerTask, "Kayak State", 80, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);
+  xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);
+  xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 7, &Handle_RfOutputTask);
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 232, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);
 
   Serial.println("");
   Serial.println("******************************");
@@ -968,11 +993,11 @@ void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, float speed, float batteryPer
 
 
 
-// Impliment all annimations
-
-// During fault / connecting do not take any new button readings / Also ignore battery updates?
-
-// Time all tasks
+// Finish annimations
+// Get video of the RF timeout issues
+// Update pixel task to use millis, not rely on task time
+// Test all Rf coms
+// Dump IMU Rf data from pi into file
 
 
 

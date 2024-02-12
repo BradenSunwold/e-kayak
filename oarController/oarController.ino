@@ -13,12 +13,19 @@ unsigned long taskTime = 0;
 
 uint32_t count = 0;
 
+// Global flags
+bool fault = false;
+bool startup = true;
+
 // Define rf24 radio
 const int rf24CE = 6;
 const int rf24CSN = 5;
 RF24 radio(rf24CE, rf24CSN, 4000000);
 // const byte address[6] = "2Node";
 uint8_t address[][6] = { "1Node", "2Node" };
+
+// Define mutex for sharing radio resource between Rx and Tx threads
+SemaphoreHandle_t radioSemaphore = NULL;
 
 // Define BNO IMU
 #define BNO08X_CS 10
@@ -154,9 +161,7 @@ void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotationalVector, ImuDataType
 //****************************** Tasks **********************************//
 // Task globals
 // Input tasks
-TaskHandle_t Handle_RfInputTask;
-TaskHandle_t Handle_ImuInputTask;
-TaskHandle_t Handle_KayakStatusManagerTask;
+TaskHandle_t Handle_ReadInputsTask;
 TaskHandle_t Handle_ProcessOutputsTask;
 TaskHandle_t Handle_ButtonInputTask;
 TaskHandle_t Handle_StateManagerTask;
@@ -186,52 +191,46 @@ void myDelayMsUntil(TickType_t *previousWakeTime, int ms)
 volatile UBaseType_t uxHighWaterMark;
 
 // RF input task
-static void RfInputTask( void *pvParameters ) 
+static void ReadInputsTask( void *pvParameters ) 
 {
   // Struct to locally store incoming RF data
   StatusMsg_t incomingData;
-  // radio.printDetails();       // (smaller) function that prints raw register values
-
-  while(1)
-  {
-    radio.setPayloadSize(sizeof(incomingData));  // float datatype occupies 4 bytes    // Read incoming rf24 radio
-    radio.startListening();
-
-    if (radio.available()) 
-    {
-      // Store incoming data to local buffer
-      radio.read(&incomingData, sizeof(incomingData));
-      // Serial.println(incomingData.statusData);
-
-      // Store relevant data to queue
-      xQueueSend(rfInMsgQueue, (void *)&incomingData, 1);
-    }
-    
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
-
-    // beginTime = millis();
-    count = 0;
-    myDelayMs(50);    // execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
-  }
-
-  Serial.println("Task Monitor: Deleting");
-  vTaskDelete( NULL );
-}
-
-// IMU input task
-static void ImuInputTask( void *pvParameters ) 
-{
 
   sh2_SensorValue_t sensorData;   // local variables to cpature reported data
-  // ImuDataType_t eulerData;
-
   FullImuDataSet_t fullImuDataSet;
 
+  radioSemaphore = xSemaphoreCreateMutex();     // Create mutex
+  
   while(1)
   {
+
+    ///////////////////////// Read RF //////////////////////////////////////
+    if( radioSemaphore != NULL )
+    {
+      /* See if we can obtain the semaphore.  If the semaphore is not
+      available wait 5 ticks to see if it becomes free. */
+      if( xSemaphoreTake( radioSemaphore, ( TickType_t ) 5 ) == pdTRUE )
+      {
+        radio.setPayloadSize(sizeof(incomingData)); 
+        if (radio.available()) 
+        {
+          // Store incoming data to local buffer
+          radio.read(&incomingData, sizeof(incomingData));
+          // Serial.println(incomingData.statusData);
+
+          // Store relevant data to queue
+          xQueueSend(rfInMsgQueue, (void *)&incomingData, 1);
+        }
+
+          xSemaphoreGive( radioSemaphore );
+      }
+      else
+      {
+          // Serial.println("Could not take mutex");
+      }
+    }
+    
+    //////////////////////// Read IMU ////////////////////////////
     // Check for IMU reset
     if (bno08x.wasReset()) 
     {
@@ -240,7 +239,7 @@ static void ImuInputTask( void *pvParameters )
     }
 
     // Read incoming sensor data
-    while (bno08x.getSensorEvent(&sensorData)) 
+    if (bno08x.getSensorEvent(&sensorData)) 
     {
       // in this demo only one report type will be received depending on FAST_MODE define (above)
       switch (sensorData.sensorId) 
@@ -275,7 +274,7 @@ static void ImuInputTask( void *pvParameters )
     // Serial.println(uxHighWaterMark);
 
     // beginTime = millis();
-    count = 0;
+    // count = 0;
     myDelayMs(50);    // execute task at 20Hz
     // taskTime = millis() - beginTime;
     // Serial.println(taskTime);
@@ -364,8 +363,16 @@ static void ButtonInputTask( void *pvParameters )
   vTaskDelete( NULL );
 }
 
-static void KayakStsManagerTask( void *pvParameters ) 
+static void StateManagerTask( void *pvParameters )
 {
+  // Initialize state
+  StateMsg_t currState;
+  currState.fAutoMode = false;
+  currState.fSpeed = 0;
+
+  uint8_t buttonPress = 0;
+
+
   StatusMsg_t rfReceiverMsg;
   rfReceiverMsg.fStatusType = eStartup;    // Initialize status type to connecting on startup
   rfReceiverMsg.fStatusData = 0.0;
@@ -378,10 +385,9 @@ static void KayakStsManagerTask( void *pvParameters )
   bool startupFlag = true;
   bool comsTimeoutFlag = false;
 
-  // myDelayMs(500);    // Give 1 second for connecting annimation to play out
-
   while(1)
   {
+    //////////////////////// Check status from pi /////////////////////////////////
     // Check for a message in the RF input queue
     if (xQueueReceive(rfInMsgQueue, (void *)&rfReceiverMsg, 0) == pdTRUE) 
     {
@@ -408,53 +414,34 @@ static void KayakStsManagerTask( void *pvParameters )
       }
     }
 
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
 
-    // beginTime = millis();
-    myDelayMs(50);    // execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
-  }
-
-  Serial.println("Task Monitor: Deleting");
-  vTaskDelete( NULL );
-}
-
-static void StateManagerTask( void *pvParameters )
-{
-  // Initialize state
-  StateMsg_t currState;
-  currState.fAutoMode = false;
-  currState.fSpeed = 0;
-
-  uint8_t buttonPress = 0;
-
-  while(1)
-  {
+    //////////////////////// Check state ///////////////////////////////
     if(xQueueReceive(buttonQueue, (void *)&buttonPress, 0) == pdTRUE)
     {
-      // Received button update 
-      if(buttonPress == 1)
+      if (!fault && !startup)
       {
-        // Single click - Increment speed and check for roll over
-        if(currState.fSpeed == 3)
+        // Received button update 
+        if(buttonPress == 1)
         {
-          currState.fSpeed = 0;
+          // Single click - Increment speed and check for roll over
+          if(currState.fSpeed == 3)
+          {
+            currState.fSpeed = 0;
+          }
+          else
+          {
+            currState.fSpeed++;
+          }
         }
-        else
+        else if(buttonPress == 2)
         {
-          currState.fSpeed++;
+          // Double click - Toggle mode
+          currState.fAutoMode = !currState.fAutoMode;
         }
-      }
-      else if(buttonPress == 2)
-      {
-        // Double click - Toggle mode
-        currState.fAutoMode = !currState.fAutoMode;
-      }
 
-      // Send current state to output proceesor
-      xQueueSend(currentStateQueue, (void *)&currState, 1);
+        // Send current state to output proceesor
+        xQueueSend(currentStateQueue, (void *)&currState, 1);
+      }
     }
 
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
@@ -472,8 +459,8 @@ static void StateManagerTask( void *pvParameters )
 
 static void ProcessOutputsTask( void *pvParameters ) 
 {
-  bool fault = false;
-  bool startup = true;
+  // bool fault = false;
+  // bool startup = true;
   bool startupConnected = false;
 
   bool autoMode = false;
@@ -549,6 +536,7 @@ static void ProcessOutputsTask( void *pvParameters )
         
         case eStartup :
           startup = true;
+          startupConnected = false;
           LoadConnectingAnnimation(ledMsg);
 
           // Add to led queue
@@ -569,7 +557,7 @@ static void ProcessOutputsTask( void *pvParameters )
         // Toggle autoMode
         autoMode = stateMsg.fAutoMode;
 
-        if(!fault)
+        if(!fault && !startup)
         {
           // Only report to LED driver / RF output if we arn't currently faulted
           LoadModeChangeAnnimation(ledMsg);
@@ -621,15 +609,15 @@ static void ProcessOutputsTask( void *pvParameters )
       batteryPercentageReport = (uint32_t) kayakBatteryPercentage;
     }
 
-    if(!fault)
+    if(!fault && !startup)
     {
       LoadGaugeUpdateAnnimation(ledMsg, speed, batteryPercentageReport);
 
       // xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
     }
 
-    uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    Serial.println(uxHighWaterMark);
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
 
     // Serial.println(currTime - prevTime);
     // beginTime = millis();
@@ -649,9 +637,6 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
   // Set default pixel map to connecting annimation sequence
   LoadConnectingAnnimation(pixelMap);
-
-  pixelMap.fDelay = 50;
-  pixelMap.fNumCyclesBlock = 0;
 
   volatile int delayCount = 0;    // Counter to track annimation delay times
   volatile int cycleCount = 0;    // Counter to track 12 cycle counter
@@ -708,7 +693,11 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
     delayCount++;
     count = 0;
+
+    // beginTime = millis();
     myDelayMs(taskDelay);    // Execute task at 100Hz
+    // taskTime = millis() - beginTime;
+    // Serial.println(taskTime);
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -724,44 +713,51 @@ static void RfOutputTask( void *pvParameters )
 
   while(1)
   {
-    radio.setPayloadSize(sizeof(outputMsg)); 
-    radio.stopListening();  // put radio in TX mode
-
-    // Read in IMU data
+    // Read in IMU / state data
     if (xQueueReceive(imuDataQueue, (void *)&imuDataOut, 0) == pdTRUE)
     {
       // Package IMU data into RF output struct
       memcpy(&outputMsg.fOutputImu, &imuDataOut, sizeof(imuDataOut));
     }
-
     if(xQueueReceive(rfOutMsgQueue, (void *)&stateDataOut, 0) == pdTRUE)
     {
       // Package state into RF output struct
       memcpy(&outputMsg.fOutputState, &stateDataOut, sizeof(stateDataOut));
     }
 
-    // Send RF data out
-    unsigned long start_timer = micros();                // start the timer
-    bool report = radio.write(&outputMsg, sizeof(outputMsg));  // transmit & save the report
-    unsigned long end_timer = micros();                  // end the timer
+    if( radioSemaphore != NULL )
+    {
+      if( xSemaphoreTake( radioSemaphore, ( TickType_t ) 5 ) == pdTRUE )
+      {
+        radio.setPayloadSize(sizeof(outputMsg)); 
+        radio.stopListening();  // put radio in TX mode
 
-    // if (report) 
-    // {
-    //   Serial.print(F("Transmission successful! "));  // payload was delivered
-    //   Serial.print(F("Time to transmit = "));
-    //   Serial.print(end_timer - start_timer);  // print the timer result
-    //   Serial.print(F(" us. Sent: "));
-    // } 
-    // else 
-    // {
-    //   Serial.println(F("Transmission failed or timed out"));  // payload was not delivered
-    // }
+        // Send RF data out
+        unsigned long start_timer = millis();                // start the timer
+        bool report = radio.write(&outputMsg, sizeof(outputMsg));  // transmit & save the report
+        unsigned long end_timer = millis();                  // end the timer
+
+        // Serial.println(end_timer - start_timer);
+
+        radio.startListening();  // put radio back in Rx mode
+
+        xSemaphoreGive( radioSemaphore );
+      }
+    }
+    else
+    {
+      // Serial.println("Could not take mutex");
+    }
 
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
     // Serial.println(uxHighWaterMark);
     
-    count = 0;
+    // count = 0;
+
+    // beginTime = millis();
     myDelayMs(50);   // execute task at 20Hz
+    // taskTime = millis() - beginTime;
+    // Serial.println(taskTime);
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -819,14 +815,12 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Create tasks
-  xTaskCreate(RfInputTask, "RF In", 84, NULL, tskIDLE_PRIORITY + 4, &Handle_RfInputTask);
-  xTaskCreate(ImuInputTask, "IMU In", 184, NULL, tskIDLE_PRIORITY + 2, &Handle_RfInputTask);
-  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 5, &Handle_ButtonInputTask);
-  xTaskCreate(KayakStsManagerTask, "Kayak Status", 80, NULL, tskIDLE_PRIORITY + 6, &Handle_KayakStatusManagerTask);   
-  xTaskCreate(StateManagerTask, "Kayak State", 80, NULL, tskIDLE_PRIORITY + 7, &Handle_StateManagerTask);
-  xTaskCreate(ProcessOutputsTask, "Process Outputs", 236, NULL, tskIDLE_PRIORITY + 8, &Handle_ProcessOutputsTask);
-  xTaskCreate(RfOutputTask, "RF Out", 112, NULL, tskIDLE_PRIORITY + 5, &Handle_RfOutputTask);
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 244, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTask);
+  xTaskCreate(ReadInputsTask, "Read in", 182, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadInputsTask);
+  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 3, &Handle_ButtonInputTask);
+  xTaskCreate(StateManagerTask, "Kayak State", 80, NULL, tskIDLE_PRIORITY + 2, &Handle_StateManagerTask);
+  xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 1, &Handle_ProcessOutputsTask);
+  xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 5, &Handle_RfOutputTask);
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 232, NULL, tskIDLE_PRIORITY + 4, &Handle_LedPixelUpdaterTask);
 
   Serial.println("");
   Serial.println("******************************");
@@ -879,6 +873,8 @@ void LoadConnectingAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[10][0], &connectSequenceTen, sizeof(connectSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &connectSequenceEleven, sizeof(connectSequenceEleven));
 
+  pixelMap.fDelay = 50;
+  pixelMap.fNumCyclesBlock = 1;
 }
 
 void LoadConnectedAnnimation(LedMap_t &pixelMap)
@@ -895,6 +891,9 @@ void LoadConnectedAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[9][0], &connectedSequenceNine, sizeof(connectedSequenceNine));
   memcpy(&pixelMap.fPixelColor[10][0], &connectedSequenceTen, sizeof(connectedSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &connectedSequenceEleven, sizeof(connectedSequenceEleven));
+
+  pixelMap.fDelay = 75;
+  pixelMap.fNumCyclesBlock = 1;
 }
 
 void LoadErrorAnnimation(LedMap_t &pixelMap)
@@ -911,6 +910,28 @@ void LoadErrorAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[9][0], &errorSequenceNine, sizeof(errorSequenceNine));
   memcpy(&pixelMap.fPixelColor[10][0], &errorSequenceTen, sizeof(errorSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &errorSequenceEleven, sizeof(errorSequenceEleven));
+
+  pixelMap.fDelay = 75;
+  pixelMap.fNumCyclesBlock = 0;
+}
+
+void LoadModeChangeAnnimation(LedMap_t &pixelMap)
+{
+  memcpy(&pixelMap.fPixelColor[0][0], &modeChangeSequenceZero, sizeof(modeChangeSequenceZero));
+  memcpy(&pixelMap.fPixelColor[1][0], &modeChangeSequenceOne, sizeof(modeChangeSequenceOne));
+  memcpy(&pixelMap.fPixelColor[2][0], &modeChangeSequenceTwo, sizeof(modeChangeSequenceTwo));
+  memcpy(&pixelMap.fPixelColor[3][0], &modeChangeSequenceThree, sizeof(modeChangeSequenceThree));
+  memcpy(&pixelMap.fPixelColor[4][0], &modeChangeSequenceFour, sizeof(modeChangeSequenceFour));
+  memcpy(&pixelMap.fPixelColor[5][0], &modeChangeSequenceFive, sizeof(modeChangeSequenceFive));
+  memcpy(&pixelMap.fPixelColor[6][0], &modeChangeSequenceSix, sizeof(modeChangeSequenceSix));
+  memcpy(&pixelMap.fPixelColor[7][0], &modeChangeSequenceSeven, sizeof(modeChangeSequenceSeven));
+  memcpy(&pixelMap.fPixelColor[8][0], &modeChangeSequenceEight, sizeof(modeChangeSequenceEight));
+  memcpy(&pixelMap.fPixelColor[9][0], &modeChangeSequenceNine, sizeof(modeChangeSequenceNine));
+  memcpy(&pixelMap.fPixelColor[10][0], &modeChangeSequenceTen, sizeof(modeChangeSequenceTen));
+  memcpy(&pixelMap.fPixelColor[11][0], &modeChangeSequenceEleven, sizeof(modeChangeSequenceEleven));
+
+  pixelMap.fDelay = 75;
+  pixelMap.fNumCyclesBlock = 2;
 }
 
 void LoadStartupAnnimation(LedMap_t &pixelMap)
@@ -918,14 +939,29 @@ void LoadStartupAnnimation(LedMap_t &pixelMap)
 
 }
 
-void LoadModeChangeAnnimation(LedMap_t &pixelMap)
-{
-
-}
-
 void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, float speed, float batteryPercentage)
 {
+//   // Startup annimation will be ramp up on each half circle of pixel ring
+//   for(int i = 0; i < (strip.numPixels() / 2); i++)
+//   {
+//     // 6 pixels on each side - Speed side want all green / Battery side want red, orange, yellow, yellow, green, green ?
+    
+//     // Set speed side
+//     pixelMap.fPixelColor[i][j]
+//     strip.setPixelColor(i, strip.Color(120, 120, 255)); 
 
+//     // Set battery side
+//     strip.setPixelColor(strip.numPixels() - i - 1, batteryColorIndex[i]);
+
+//     strip.show();
+//     myDelayMs(wait);
+//   }
+
+  // // Ramp speed half back down since not yet moving
+  // for(int i = (strip.numPixels() / 2) - 1; i >= 0; i--)
+  // {
+  //   strip.setPixelColor(i, strip.Color(0, 0, 0)); 
+  // }
 }
 
 

@@ -129,4 +129,44 @@ uint32_t errorSequenceTen[12] = {strip.Color(84, 0, 0), strip.Color(84, 0, 0), s
                               strip.Color(84, 0, 0), strip.Color(84, 0, 0)}; 
 uint32_t errorSequenceEleven[12] = {strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0),
                               strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0), strip.Color(42, 0, 0),
-                              strip.Color(42, 0, 0), strip.Color(42, 0, 0)};                             
+                              strip.Color(42, 0, 0), strip.Color(42, 0, 0)};     
+
+
+
+/****************************    MODE CHANGE ANNIMATION   ***********************************/
+uint32_t modeChangeSequenceZero[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t modeChangeSequenceOne[12] = {strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42),
+                              strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42),
+                              strip.Color(20, 20, 42), strip.Color(20, 20, 42)};
+uint32_t modeChangeSequenceTwo[12] = {strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84),
+                              strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84),
+                              strip.Color(40, 40, 84), strip.Color(40, 40, 84)};
+uint32_t modeChangeSequenceThree[12] = {strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127),
+                              strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127),
+                              strip.Color(60, 60, 127), strip.Color(60, 60, 127)};
+uint32_t modeChangeSequenceFour[12] = {strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169),
+                              strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169),
+                              strip.Color(80, 80, 169), strip.Color(80, 80, 169)};
+uint32_t modeChangeSequenceFive[12] = {strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211),
+                              strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211),
+                              strip.Color(100, 100, 211), strip.Color(100, 100, 211)};
+uint32_t modeChangeSequenceSix[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255),
+                              strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255),
+                              strip.Color(120, 120, 255), strip.Color(120, 120, 255)};
+uint32_t modeChangeSequenceSeven[12] = {strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211),
+                              strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211), strip.Color(100, 100, 211),
+                              strip.Color(100, 100, 211), strip.Color(100, 100, 211)};
+uint32_t modeChangeSequenceEight[12] = {strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169),
+                              strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169), strip.Color(80, 80, 169),
+                              strip.Color(80, 80, 169), strip.Color(80, 80, 169)};
+uint32_t modeChangeSequenceNine[12] = {strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127),
+                              strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127), strip.Color(60, 60, 127),
+                              strip.Color(60, 60, 127), strip.Color(60, 60, 127)};                        
+uint32_t modeChangeSequenceTen[12] = {strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84),
+                              strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84), strip.Color(40, 40, 84),
+                              strip.Color(40, 40, 84), strip.Color(40, 40, 84)};
+uint32_t modeChangeSequenceEleven[12] = {strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42),
+                              strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42),
+                              strip.Color(20, 20, 42), strip.Color(20, 20, 42)};                                                    

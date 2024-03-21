@@ -216,7 +216,11 @@ static void ReadRfTask( void *pvParameters )
         {
           // Store incoming data to local buffer
           radio.read(&incomingData, sizeof(incomingData));
-          // Serial.println(incomingData.statusData);
+          if(incomingData.fStatusType == eBatteryVolt)
+          {
+            Serial.print("Received Battery Update: ");
+            Serial.println(incomingData.fStatusData);
+          }
 
           // Store relevant data to queue
           xQueueSend(rfInMsgQueue, (void *)&incomingData, 1);
@@ -462,10 +466,18 @@ static void StateManagerTask( void *pvParameters )
           // Double click - Toggle mode
           currState.fAutoMode = !currState.fAutoMode;
         }
-
-        // Send current state to output proceesor
-        xQueueSend(currentStateQueue, (void *)&currState, 1);
       }
+      else
+      {
+        // Faulted or in startup so clamp to 0 speed
+        currState.fSpeed = 0;
+        currState.fAutoMode = false;
+        
+      }
+      // Send current state to output proceesor
+      xQueueSend(currentStateQueue, (void *)&currState, 1);
+
+      buttonPress = 0;    // Reset flag variable
     }
 
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
@@ -662,7 +674,10 @@ static void LedPixelUpdaterTask( void *pvParameters )
   // Set default pixel map to connecting annimation sequence
   LoadConnectingAnnimation(pixelMap);
 
-  volatile int delayCount = 0;    // Counter to track annimation delay times
+  // Mechanism to track when next annimation update should be  
+  volatile TickType_t currPixelTimeout = xTaskGetTickCount();
+  volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);  
+
   volatile int cycleCount = 0;    // Counter to track 12 cycle counter
   volatile int taskDelay = 25;
   
@@ -678,7 +693,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
       if(xQueueReceive(ledPixelMapQueue, (void *)&pixelMap, 0) == pdTRUE)
       {
         // Read from pixel map queue and update annimation struct
-        delayCount = 0;
+        nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);    // Reset next annimation timeout
         cycleCount = 0;
       }
     }
@@ -698,7 +713,8 @@ static void LedPixelUpdaterTask( void *pvParameters )
       }
     }
 
-    if((delayCount * taskDelay) >= pixelMap.fDelay)
+    // UPDATE HERE TO READ NEW TIME
+    if(currPixelTimeout = xTaskGetTickCount() >= nextPixelTimeout)
     {
       // Serial.println("tock");
       // Set each pixel for the current frame
@@ -708,14 +724,13 @@ static void LedPixelUpdaterTask( void *pvParameters )
         strip.show();
       }
 
-      delayCount = 0;
+      nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);  // Reset next annimation timeout
       cycleCount++;
     }
 
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
     // Serial.println(uxHighWaterMark);
 
-    delayCount++;
     count = 0;
 
     // beginTime = millis();
@@ -961,44 +976,69 @@ void LoadModeChangeAnnimation(LedMap_t &pixelMap)
 
 void LoadStartupAnnimation(LedMap_t &pixelMap)
 {
+  memcpy(&pixelMap.fPixelColor[0][0], &startSequenceZero, sizeof(startSequenceZero));
+  memcpy(&pixelMap.fPixelColor[1][0], &startSequenceOne, sizeof(startSequenceOne));
+  memcpy(&pixelMap.fPixelColor[2][0], &startSequenceTwo, sizeof(startSequenceTwo));
+  memcpy(&pixelMap.fPixelColor[3][0], &startSequenceThree, sizeof(startSequenceThree));
+  memcpy(&pixelMap.fPixelColor[4][0], &startSequenceFour, sizeof(startSequenceFour));
+  memcpy(&pixelMap.fPixelColor[5][0], &startSequenceFive, sizeof(startSequenceFive));
+  memcpy(&pixelMap.fPixelColor[6][0], &startSequenceSix, sizeof(startSequenceSix));
+  memcpy(&pixelMap.fPixelColor[7][0], &startSequenceSeven, sizeof(startSequenceSeven));
+  memcpy(&pixelMap.fPixelColor[8][0], &startSequenceEight, sizeof(startSequenceEight));
+  memcpy(&pixelMap.fPixelColor[9][0], &startSequenceNine, sizeof(startSequenceNine));
+  memcpy(&pixelMap.fPixelColor[10][0], &startSequenceTen, sizeof(startSequenceTen));
+  memcpy(&pixelMap.fPixelColor[11][0], &startSequenceEleven, sizeof(startSequenceEleven));
 
+  pixelMap.fDelay = 75;
+  pixelMap.fNumCyclesBlock = 1;
 }
 
-void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, float speed, float batteryPercentage)
+void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, uint32_t speed, uint32_t batteryPercentage)
 {
-//   // Startup annimation will be ramp up on each half circle of pixel ring
-//   for(int i = 0; i < (strip.numPixels() / 2); i++)
-//   {
-//     // 6 pixels on each side - Speed side want all green / Battery side want red, orange, yellow, yellow, green, green ?
-    
-//     // Set speed side
-//     pixelMap.fPixelColor[i][j]
-//     strip.setPixelColor(i, strip.Color(120, 120, 255)); 
+  uint32_t speedColor = strip.Color(120, 120, 255); 
+  int ledMultiplier = round((strip.numPixels() / 2) / 3);
 
-//     // Set battery side
-//     strip.setPixelColor(strip.numPixels() - i - 1, batteryColorIndex[i]);
+  uint32_t speedPixelsOn = speed * ledMultiplier;     // Determines how many speed pixels should be on to represent new speed
 
-//     strip.show();
-//     myDelayMs(wait);
-//   }
+  float batteryPixelsOn = round(batteryPercentage / (100.0 / ((float)strip.numPixels() / 2.0)));
 
-  // // Ramp speed half back down since not yet moving
-  // for(int i = (strip.numPixels() / 2) - 1; i >= 0; i--)
-  // {
-  //   strip.setPixelColor(i, strip.Color(0, 0, 0)); 
-  // }
+
+  for(int i = 0; i < strip.numPixels() / 2; i++)
+  {
+    for(int j = 0; j < strip.numPixels() / 2; j++)
+    {
+      // First 6 pixels are speed, set all 12 pixel sets to same speed #
+      if(j < speedPixelsOn)
+      {
+        // Set current speed pixel on
+        pixelMap.fPixelColor[i][j] = speedColor;
+      }
+      else
+      {
+        pixelMap.fPixelColor[i][j] = 0;     // Make sure other pixels are off
+      }
+
+      // Last 6 pixels are battery, set all 12 pixel sets to same battery #
+      if(j < batteryPixelsOn)
+      {
+        // Set current battery pixel on
+        pixelMap.fPixelColor[i][strip.numPixels() - j - 1] = batteryColorIndex[j];
+      }
+      else
+      {
+        pixelMap.fPixelColor[i][strip.numPixels() - j - 1] = 0;     // Make sure other pixels are off
+      }
+    }
+  }
+  pixelMap.fDelay = 25;
+  pixelMap.fNumCyclesBlock = 1;
 }
 
 
 
 
-
-// Finish annimations
-// Get video of the RF timeout issues
-// Update pixel task to use millis, not rely on task time
+// Get video of the RF timeout issues - blinking differently
 // Test all Rf coms
-// Dump IMU Rf data from pi into file
-
 
 
 

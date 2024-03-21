@@ -12,6 +12,10 @@ typedef struct
   int fNumCyclesBlock;
 } LedMap_t;
 
+// Set battery indication LED map
+uint32_t batteryColorIndex[] = {strip.Color(255, 0, 0), strip.Color(255, 50, 0), strip.Color(255, 170, 0), strip.Color(200, 255, 0),
+                                        strip.Color(75, 255, 0), strip.Color(0, 255, 0)};
+
 
 // /****************************    CONNECTING ANNIMATION   ***********************************/
 uint32_t connectSequenceZero[12] = {strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 255, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
@@ -169,4 +173,44 @@ uint32_t modeChangeSequenceTen[12] = {strip.Color(40, 40, 84), strip.Color(40, 4
                               strip.Color(40, 40, 84), strip.Color(40, 40, 84)};
 uint32_t modeChangeSequenceEleven[12] = {strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42),
                               strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42), strip.Color(20, 20, 42),
-                              strip.Color(20, 20, 42), strip.Color(20, 20, 42)};                                                    
+                              strip.Color(20, 20, 42), strip.Color(20, 20, 42)};    
+
+
+
+/****************************    START UP ANNIMATION   ***********************************/
+uint32_t startSequenceZero[12] = {strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t startSequenceOne[12] = {strip.Color(120, 120, 255), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t startSequenceTwo[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], batteryColorIndex[1], strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t startSequenceThree[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], batteryColorIndex[1], batteryColorIndex[2], strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t startSequenceFour[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], batteryColorIndex[1], batteryColorIndex[2], batteryColorIndex[3],
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t startSequenceFive[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], batteryColorIndex[1], batteryColorIndex[2], batteryColorIndex[3],
+                              batteryColorIndex[4], strip.Color(0, 0, 0)};
+uint32_t startSequenceSix[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255),
+                              strip.Color(120, 120, 255), batteryColorIndex[0], batteryColorIndex[1], batteryColorIndex[2], batteryColorIndex[3],
+                              batteryColorIndex[4], batteryColorIndex[5]};
+uint32_t startSequenceSeven[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], batteryColorIndex[1], batteryColorIndex[2], batteryColorIndex[3],
+                              batteryColorIndex[4], strip.Color(0, 0, 0)};
+uint32_t startSequenceEight[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], batteryColorIndex[1], batteryColorIndex[2], batteryColorIndex[3],
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t startSequenceNine[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], batteryColorIndex[1], batteryColorIndex[2], strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};
+uint32_t startSequenceTen[12] = {strip.Color(120, 120, 255), strip.Color(120, 120, 255), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], batteryColorIndex[1], strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};                      
+uint32_t startSequenceEleven[12] = {strip.Color(120, 120, 255), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), batteryColorIndex[0], strip.Color(0, 0, 0), strip.Color(0, 0, 0), strip.Color(0, 0, 0),
+                              strip.Color(0, 0, 0), strip.Color(0, 0, 0)};                                                 

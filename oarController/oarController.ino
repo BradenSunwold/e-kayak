@@ -509,6 +509,7 @@ static void ProcessOutputsTask( void *pvParameters )
   float kayakBatteryVolt = 26;
   float oarbatteryVolt = 4.2;
   uint32_t batteryPercentageReport = 100;
+  uint32_t prevBatteryPercentage = 99;    // Set prev percentage 99 to force an animation update
 
   const TickType_t xTicksToWait = 5 / portTICK_PERIOD_MS;
 
@@ -585,31 +586,7 @@ static void ProcessOutputsTask( void *pvParameters )
       }
     }
 
-    // Next check current state and report to LED driver / RF out any changes
-    if(xQueueReceive(currentStateQueue, (void *)&stateMsg, 0) == pdTRUE)
-    {
-      if((stateMsg.fAutoMode && !autoMode) || (!stateMsg.fAutoMode && autoMode))
-      {
-        // Toggle autoMode
-        autoMode = stateMsg.fAutoMode;
-
-        if(!fault && !startup)
-        {
-          // Only report to LED driver / RF output if we arn't currently faulted
-          LoadModeChangeAnnimation(ledMsg);
-          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-          xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
-        }
-
-      }
-      else if(stateMsg.fSpeed != speed)
-      {
-        speed = stateMsg.fSpeed;                            // Update local speed checker variable
-        xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
-      }
-    }
-
-    // Finally read the batteries
+    //  Read the batteries
     float oarBatteryVoltage = analogRead(VBATPIN);
     oarBatteryVoltage *= 2;        // Account for voltage divider
     oarBatteryVoltage *= 3.3;      // Multiply by 3.3V - reference voltage
@@ -645,11 +622,45 @@ static void ProcessOutputsTask( void *pvParameters )
       batteryPercentageReport = (uint32_t) kayakBatteryPercentage;
     }
 
-    if(!fault && !startup)
+    if(!fault && !startup && batteryPercentageReport != prevBatteryPercentage)
     {
+      // Only send new battery status if battery level has changed
       LoadGaugeUpdateAnnimation(ledMsg, speed, batteryPercentageReport);
+      // Serial.println("Sending battery Update to LED");
 
-      // xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+      xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+      prevBatteryPercentage = batteryPercentageReport;
+    }
+
+    // Next check current state and report to LED driver / RF out any changes
+    if(xQueueReceive(currentStateQueue, (void *)&stateMsg, 0) == pdTRUE)
+    {
+      if((stateMsg.fAutoMode && !autoMode) || (!stateMsg.fAutoMode && autoMode))
+      {
+        // Toggle autoMode
+        autoMode = stateMsg.fAutoMode;
+
+        if(!fault && !startup)
+        {
+          // Only report to LED driver / RF output if we arn't currently faulted
+          LoadModeChangeAnnimation(ledMsg);
+          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+          xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
+        }
+
+      }
+      else if(stateMsg.fSpeed != speed)
+      {
+        speed = stateMsg.fSpeed;                            // Update local speed checker variable
+
+        if(!fault && !startup)
+        {
+          // Only report to LED driver / RF output if we arn't currently faulted
+          LoadGaugeUpdateAnnimation(ledMsg, speed, batteryPercentageReport);
+          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+          xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
+        }
+      }
     }
 
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
@@ -674,10 +685,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
   // Set default pixel map to connecting annimation sequence
   LoadConnectingAnnimation(pixelMap);
 
-  // Mechanism to track when next annimation update should be  
-  volatile TickType_t currPixelTimeout = xTaskGetTickCount();
-  volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);  
-
+  volatile int delayCount = 0;    // Counter to track annimation delay times
   volatile int cycleCount = 0;    // Counter to track 12 cycle counter
   volatile int taskDelay = 25;
   
@@ -692,8 +700,10 @@ static void LedPixelUpdaterTask( void *pvParameters )
       // Only read in next annimation if pixel map unblocked
       if(xQueueReceive(ledPixelMapQueue, (void *)&pixelMap, 0) == pdTRUE)
       {
+        Serial.print("LED driver reading: ");
+        Serial.println(pixelMap.fDelay);
         // Read from pixel map queue and update annimation struct
-        nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);    // Reset next annimation timeout
+        delayCount = 0;
         cycleCount = 0;
       }
     }
@@ -713,8 +723,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
       }
     }
 
-    // UPDATE HERE TO READ NEW TIME
-    if(currPixelTimeout = xTaskGetTickCount() >= nextPixelTimeout)
+    if((delayCount * taskDelay) >= pixelMap.fDelay)
     {
       // Serial.println("tock");
       // Set each pixel for the current frame
@@ -724,13 +733,14 @@ static void LedPixelUpdaterTask( void *pvParameters )
         strip.show();
       }
 
-      nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);  // Reset next annimation timeout
+      delayCount = 0;
       cycleCount++;
     }
 
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
     // Serial.println(uxHighWaterMark);
 
+    delayCount++;
     count = 0;
 
     // beginTime = millis();
@@ -989,7 +999,7 @@ void LoadStartupAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[10][0], &startSequenceTen, sizeof(startSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &startSequenceEleven, sizeof(startSequenceEleven));
 
-  pixelMap.fDelay = 75;
+  pixelMap.fDelay = 80;
   pixelMap.fNumCyclesBlock = 1;
 }
 
@@ -999,39 +1009,80 @@ void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, uint32_t speed, uint32_t batt
   int ledMultiplier = round((strip.numPixels() / 2) / 3);
 
   uint32_t speedPixelsOn = speed * ledMultiplier;     // Determines how many speed pixels should be on to represent new speed
+  Serial.print("num speed pixels: ");
+  Serial.println(speedPixelsOn);
 
-  float batteryPixelsOn = round(batteryPercentage / (100.0 / ((float)strip.numPixels() / 2.0)));
+  uint32_t batteryPixelsOn = round(batteryPercentage / (100.0 / ((float)strip.numPixels() / 2.0)));
+  Serial.println("Num bat pixels on:");
+  Serial.println(batteryPercentage);
+  Serial.println(batteryPixelsOn);
 
-
-  for(int i = 0; i < strip.numPixels() / 2; i++)
+  int speedCount = 0;
+  int batteryCount = 0;
+  for(int i = (strip.numPixels() / 2) - 1; i >= 0; i--)
   {
-    for(int j = 0; j < strip.numPixels() / 2; j++)
+    if(speedCount < speedPixelsOn)
     {
-      // First 6 pixels are speed, set all 12 pixel sets to same speed #
-      if(j < speedPixelsOn)
-      {
-        // Set current speed pixel on
-        pixelMap.fPixelColor[i][j] = speedColor;
-      }
-      else
-      {
-        pixelMap.fPixelColor[i][j] = 0;     // Make sure other pixels are off
-      }
-
-      // Last 6 pixels are battery, set all 12 pixel sets to same battery #
-      if(j < batteryPixelsOn)
-      {
-        // Set current battery pixel on
-        pixelMap.fPixelColor[i][strip.numPixels() - j - 1] = batteryColorIndex[j];
-      }
-      else
-      {
-        pixelMap.fPixelColor[i][strip.numPixels() - j - 1] = 0;     // Make sure other pixels are off
-      }
+      // Keep turning on speed LEDs until reached number of on
+      pixelMap.fPixelColor[0][i] = speedColor;
     }
+    else
+    {
+      pixelMap.fPixelColor[0][i] = 0;  // Turn off unused LEDs
+    }
+    speedCount++;
   }
-  pixelMap.fDelay = 25;
-  pixelMap.fNumCyclesBlock = 1;
+
+  for(int i = strip.numPixels() / 2; i < strip.numPixels(); i++)
+  {
+    if(batteryCount < batteryPixelsOn)
+    {
+      // Keep turning on speed LEDs until reached number of on
+      pixelMap.fPixelColor[0][i] = batteryColorIndex[batteryCount];
+    }
+    else
+    {
+      pixelMap.fPixelColor[0][i] = 0;  // Turn off unused LEDs
+    }
+    batteryCount++;
+  }
+
+  // Copy oth index with correct color setting to rest of pixel map
+  for(int i = 1; i < 12; i++)
+  {
+    memcpy(&pixelMap.fPixelColor[i], &pixelMap.fPixelColor[0], sizeof(pixelMap.fPixelColor[0]));
+  }
+
+
+  // for(int i = 0; i < strip.numPixels() / 2; i++)
+  // {
+  //   for(int j = 0; j < strip.numPixels() / 2; j++)
+  //   {
+  //     // First 6 pixels are speed, set all 12 pixel sets to same speed #
+  //     if(j < speedPixelsOn)
+  //     {
+  //       // Set current speed pixel on
+  //       pixelMap.fPixelColor[i][j] = speedColor;
+  //     }
+  //     else
+  //     {
+  //       pixelMap.fPixelColor[i][j] = 0;     // Make sure other pixels are off
+  //     }
+
+  //     // Last 6 pixels are battery, set all 12 pixel sets to same battery #
+  //     if(j < batteryPixelsOn)
+  //     {
+  //       // Set current battery pixel on
+  //       pixelMap.fPixelColor[i][strip.numPixels() - j - 1] = batteryColorIndex[j];
+  //     }
+  //     else
+  //     {
+  //       pixelMap.fPixelColor[i][strip.numPixels() - j - 1] = 0;     // Make sure other pixels are off
+  //     }
+  //   }
+  // }
+  pixelMap.fDelay = 200;
+  pixelMap.fNumCyclesBlock = 0;
 }
 
 

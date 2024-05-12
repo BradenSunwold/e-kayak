@@ -111,6 +111,20 @@ typedef struct
   FullImuDataSet_t fOutputImu;
 } RfOutputMsg_t;
 
+typedef struct 
+{
+  uint8_t fMessageIndex_1;
+  StateMsg_t fOutputState;
+  ImuDataType_t fOutputImuEuler;
+  float fPad[3];
+} RfOutputMsgFirstHalf_t;
+
+typedef struct 
+{
+  uint8_t fMessageIndex_2;
+  ImuAddReportsVector_t fOutputImuAddReports;
+} RfOutputMsgSecondHalf_t;
+
 
 
 //######################** Support functions ****************************//
@@ -218,8 +232,8 @@ static void ReadRfTask( void *pvParameters )
           radio.read(&incomingData, sizeof(incomingData));
           if(incomingData.fStatusType == eBatteryVolt)
           {
-            Serial.print("Received Battery Update: ");
-            Serial.println(incomingData.fStatusData);
+            // Serial.print("Received Battery Update: ");
+            // Serial.println(incomingData.fStatusData);
           }
 
           // Store relevant data to queue
@@ -513,6 +527,8 @@ static void ProcessOutputsTask( void *pvParameters )
 
   const TickType_t xTicksToWait = 5 / portTICK_PERIOD_MS;
 
+  Serial.println("Connecting");
+
   while(1)
   {
     // First check kayak status
@@ -554,6 +570,7 @@ static void ProcessOutputsTask( void *pvParameters )
             {
               // First load connnected annimation before startup annimation
               LoadConnectedAnnimation(ledMsg);
+              Serial.println("Connected");
 
               xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
               startupConnected = true;
@@ -562,6 +579,7 @@ static void ProcessOutputsTask( void *pvParameters )
             {
               // Now load startup annimation after connected annimation
               LoadStartupAnnimation(ledMsg);
+              Serial.println("Startup");
 
               xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
               startup = false;    // Signal output processor that startup is over
@@ -644,6 +662,8 @@ static void ProcessOutputsTask( void *pvParameters )
         {
           // Only report to LED driver / RF output if we arn't currently faulted
           LoadModeChangeAnnimation(ledMsg);
+          Serial.print("Mode: ");
+          Serial.println(stateMsg.fAutoMode);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
           xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
         }
@@ -657,6 +677,8 @@ static void ProcessOutputsTask( void *pvParameters )
         {
           // Only report to LED driver / RF output if we arn't currently faulted
           LoadGaugeUpdateAnnimation(ledMsg, speed, batteryPercentageReport);
+          Serial.print("Speed: ");
+          Serial.println(stateMsg.fSpeed);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
           xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
         }
@@ -666,7 +688,6 @@ static void ProcessOutputsTask( void *pvParameters )
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
     // Serial.println(uxHighWaterMark);
 
-    // Serial.println(currTime - prevTime);
     // beginTime = millis();
     myDelayMs(100);    // execute task at 20Hz
     // taskTime = millis() - beginTime;
@@ -685,7 +706,10 @@ static void LedPixelUpdaterTask( void *pvParameters )
   // Set default pixel map to connecting annimation sequence
   LoadConnectingAnnimation(pixelMap);
 
-  volatile int delayCount = 0;    // Counter to track annimation delay times
+  // Mechanism to track when next annimation update should be  
+  volatile TickType_t currPixelTimeout = xTaskGetTickCount();
+  volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);  
+
   volatile int cycleCount = 0;    // Counter to track 12 cycle counter
   volatile int taskDelay = 25;
   
@@ -700,10 +724,8 @@ static void LedPixelUpdaterTask( void *pvParameters )
       // Only read in next annimation if pixel map unblocked
       if(xQueueReceive(ledPixelMapQueue, (void *)&pixelMap, 0) == pdTRUE)
       {
-        Serial.print("LED driver reading: ");
-        Serial.println(pixelMap.fDelay);
         // Read from pixel map queue and update annimation struct
-        delayCount = 0;
+        nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);    // Reset next annimation timeout
         cycleCount = 0;
       }
     }
@@ -723,7 +745,8 @@ static void LedPixelUpdaterTask( void *pvParameters )
       }
     }
 
-    if((delayCount * taskDelay) >= pixelMap.fDelay)
+    // UPDATE HERE TO READ NEW TIME
+    if(currPixelTimeout = xTaskGetTickCount() >= nextPixelTimeout)
     {
       // Serial.println("tock");
       // Set each pixel for the current frame
@@ -733,14 +756,13 @@ static void LedPixelUpdaterTask( void *pvParameters )
         strip.show();
       }
 
-      delayCount = 0;
+      nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);  // Reset next annimation timeout
       cycleCount++;
     }
 
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
     // Serial.println(uxHighWaterMark);
 
-    delayCount++;
     count = 0;
 
     // beginTime = millis();
@@ -756,9 +778,13 @@ static void LedPixelUpdaterTask( void *pvParameters )
 static void RfOutputTask( void *pvParameters )
 {
   StateMsg_t stateDataOut;
-  ImuDataType_t imuDataOut;
+  FullImuDataSet_t imuDataOut;
 
-  RfOutputMsg_t outputMsg;
+  RfOutputMsgFirstHalf_t outputMsgFirstHalf;
+  RfOutputMsgSecondHalf_t outputMsgSecondHalf;
+  outputMsgFirstHalf.fMessageIndex_1 = 1;
+  outputMsgSecondHalf.fMessageIndex_2 = 2;
+
 
   while(1)
   {
@@ -766,24 +792,31 @@ static void RfOutputTask( void *pvParameters )
     if (xQueueReceive(imuDataQueue, (void *)&imuDataOut, 0) == pdTRUE)
     {
       // Package IMU data into RF output struct
-      memcpy(&outputMsg.fOutputImu, &imuDataOut, sizeof(imuDataOut));
+      memcpy(&outputMsgFirstHalf.fOutputImuEuler, &imuDataOut.fEulerData, sizeof(imuDataOut.fEulerData));
+      memcpy(&outputMsgSecondHalf.fOutputImuAddReports, &imuDataOut.fAddReportsVect, sizeof(imuDataOut.fAddReportsVect));
     }
     if(xQueueReceive(rfOutMsgQueue, (void *)&stateDataOut, 0) == pdTRUE)
     {
       // Package state into RF output struct
-      memcpy(&outputMsg.fOutputState, &stateDataOut, sizeof(stateDataOut));
+      memcpy(&outputMsgFirstHalf.fOutputState, &stateDataOut, sizeof(stateDataOut));
+      Serial.println(outputMsgFirstHalf.fOutputState.fAutoMode);
+      Serial.println(outputMsgFirstHalf.fOutputState.fSpeed);
     }
 
     if( radioSemaphore != NULL )
     {
       if( xSemaphoreTake( radioSemaphore, ( TickType_t ) 5 ) == pdTRUE )
       {
-        radio.setPayloadSize(sizeof(outputMsg)); 
+        // radio.setPayloadSize(sizeof(outputMsg)); 
+        radio.setPayloadSize(sizeof(outputMsgFirstHalf)); 
         radio.stopListening();  // put radio in TX mode
 
         // Send RF data out
         unsigned long start_timer = millis();                // start the timer
-        bool report = radio.write(&outputMsg, sizeof(outputMsg));  // transmit & save the report
+        bool report = radio.write(&outputMsgFirstHalf, sizeof(outputMsgFirstHalf));  // transmit & save the report
+
+        radio.setPayloadSize(sizeof(outputMsgSecondHalf));
+        report = radio.write(&outputMsgSecondHalf, sizeof(outputMsgSecondHalf));  // transmit & save the report
         unsigned long end_timer = millis();                  // end the timer
 
         // Serial.println(end_timer - start_timer);
@@ -821,7 +854,7 @@ void setup()
 
   int serialResetCount = 0;
   Serial.begin(9600);
-  while (!Serial)// && serialResetCount < 10) 
+  while (!Serial && serialResetCount < 100) 
   {
     delay(10);     // will pause until serial console opens
     serialResetCount++;
@@ -864,12 +897,12 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Create tasks
-  xTaskCreate(ReadRfTask, "Read in", 84, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);
-  xTaskCreate(ReadImuTask, "Read in", 178, NULL, tskIDLE_PRIORITY + 7, &Handle_ReadImuTask);
-  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 6, &Handle_ButtonInputTask);
-  xTaskCreate(StateManagerTask, "Kayak State", 80, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);
+  xTaskCreate(ReadRfTask, "Read in", 88, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);
+  xTaskCreate(ReadImuTask, "Read in", 184, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);
+  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);
+  xTaskCreate(StateManagerTask, "Kayak State", 84, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);
-  xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 7, &Handle_RfOutputTask);
+  xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 232, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);
 
   Serial.println("");
@@ -1009,13 +1042,13 @@ void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, uint32_t speed, uint32_t batt
   int ledMultiplier = round((strip.numPixels() / 2) / 3);
 
   uint32_t speedPixelsOn = speed * ledMultiplier;     // Determines how many speed pixels should be on to represent new speed
-  Serial.print("num speed pixels: ");
-  Serial.println(speedPixelsOn);
+  // Serial.print("num speed pixels: ");
+  // Serial.println(speedPixelsOn);
 
   uint32_t batteryPixelsOn = round(batteryPercentage / (100.0 / ((float)strip.numPixels() / 2.0)));
-  Serial.println("Num bat pixels on:");
-  Serial.println(batteryPercentage);
-  Serial.println(batteryPixelsOn);
+  // Serial.println("Num bat pixels on:");
+  // Serial.println(batteryPercentage);
+  // Serial.println(batteryPixelsOn);
 
   int speedCount = 0;
   int batteryCount = 0;

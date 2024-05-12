@@ -3,6 +3,6 @@ rfManager:
   rfReadDataRateInMilliseconds: 50
   rfWriteDataRateInMilliseconds: 100
   rfLoggerVerbosityLevel: 1
-  rfLoggerFilePath: ~/Documents/python/ekayak/logs/rfLog.txt
+  rfLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/rfLog.txt
 motorManager:
   maxCurrentInMilliAmps: 12000

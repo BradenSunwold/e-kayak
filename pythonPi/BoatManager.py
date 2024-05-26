@@ -4,7 +4,7 @@ import argparse
 import time
 import struct
 from pyrf24 import RF24, RF24_PA_LOW
-import schedule
+import sched
 import yaml
 import logging
 
@@ -32,6 +32,9 @@ class RfManager:
     self.mCurrentMotorMode = 0
     self.mCurrentMotorSpeed = 0
 
+    self.mPrevReadTimeStamp = 0
+    self.mDataRate = 0
+
     # IMU member vars
     self.mCurrentMsgNum = 0
     self.mCurrentRoll = 0
@@ -50,6 +53,10 @@ class RfManager:
     print(self.mReadDataRate)
     self.mWriteDataRate = self.mConfigurator['rfWriteDataRateInMilliseconds']
     print(self.mWriteDataRate)
+
+    self.mScheduler = sched.scheduler(time.time, time.sleep)
+    self.mRxInterval = self.mConfigurator['rfReadDataRateInMilliseconds'] / 1000 
+    self.mTxInterval = self.mConfigurator['rfWriteDataRateInMilliseconds'] / 1000
     
     # Set up radio for coms
     self.mRadio = RF24(22, 0)
@@ -63,48 +70,77 @@ class RfManager:
     self.mRadio.open_tx_pipe(self.mAddress[self.mRadioNumber])  
     self.mRadio.open_rx_pipe(1, self.mAddress[not self.mRadioNumber])  
 
-  def RfSend(self, status, data):
+  def RfSend(self):
+    
+    status = StatusType.eBatteryVolt
+    data = 25.0
+    print("Writing")
     self.mRadio.payload_size = struct.calcsize('hf') # Payload consists of status type and float value
     self.mRadio.listen = False  # ensures the nRF24L01 is in TX mode
     
     payload = struct.pack('hf', status, data)
     result = self.mRadio.write(payload)
 
-    time.sleep(.5)
+    self.mScheduler.enter(self.mTxInterval, 1, self.RfSend)
 
   def RfReceive(self):
+    print("Reading")
     self.mRadio.payload_size = 28   # standard incoming data will be 28 bytes
     self.mRadio.listen = True 
+   
     
+
+#    activeRead = True
+#    #has_payload, pipe_number = self.mRadio.available_pipe()
+#    while(activeRead) :
     has_payload, pipe_number = self.mRadio.available_pipe()
-    if has_payload:
-      length = self.mRadio.payload_size  # grab the payload length
-      #print(length)
-      # fetch 1 payload from RX FIFO
-      received = self.mRadio.read(length)  # also clears radio.irq_dr status flag
+    
+    if has_payload :
+        length = self.mRadio.payload_size  # grab the payload length
+        #print(length)
+        # fetch 1 payload from RX FIFO
+        received = self.mRadio.read(length)  # also clears radio.irq_dr status flag
       
-      # If this is first half of message
-      if(struct.unpack("B", received[:1])[0] == 1) :
-          self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY = struct.unpack(self.mRfReceiveDataFormatMsgOne, received)
+        # If this is first half of message
+        if(struct.unpack("B", received[:1])[0] == 1) :
+            self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY = struct.unpack(self.mRfReceiveDataFormatMsgOne, received)
           
-          # Log IMU data
-          self.mLogger.debug('Msg 1')
-          self.mLogger.info('Mode: %s', self.mCurrentMotorMode)
-          self.mLogger.info('Speed: %s', self.mCurrentMotorSpeed)
-          self.mLogger.info('Roll: %.4f', self.mCurrentRoll)
-          self.mLogger.info('Pitch: %.4f', self.mCurrentPitch)
-          self.mLogger.info('Yaw: %.4f', self.mCurrentYaw)
-      else :
-          self.mCurrentMsgNum, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveDataFormatMsgTwo, received)
+            # Log IMU data
+            self.mLogger.debug('Msg 1')
+            self.mLogger.info('Mode: %s', self.mCurrentMotorMode)
+            self.mLogger.info('Speed: %s', self.mCurrentMotorSpeed)
+            self.mLogger.info('Roll: %.4f', self.mCurrentRoll)
+            self.mLogger.info('Pitch: %.4f', self.mCurrentPitch)
+            self.mLogger.info('Yaw: %.4f', self.mCurrentYaw)
+
+            self.mDataRate = 1 / (time.time() - self.mPrevReadTimeStamp) 
+            self.mLogger.info('message timing: %.4f', time.time() - self.mPrevReadTimeStamp)
+            self.mPrevReadTimeStamp = time.time()     # Capture previous data read timestamp in order to detect data rate issues
+            #self.mLogger.info('data Rate: %.4f', self.mDataRate)
+        else :
+            self.mCurrentMsgNum, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveDataFormatMsgTwo, received)
           
-          # Log IMU data
-          self.mLogger.debug('Msg 2')
-          self.mLogger.info('X Acceleration: %.4f', self.mCurrentAccelX)
-          self.mLogger.info('X Gyroscope: %.4f', self.mCurrentGyroX)
-          self.mLogger.info('Y Acceleration: %.4f', self.mCurrentAccelY)
-          self.mLogger.info('Y Gyroscope: %.4f', self.mCurrentGyroY)
-          self.mLogger.info('Z Acceleration: %.4f', self.mCurrentAccelZ)
-          self.mLogger.info('Z Gyroscope: %.4f', self.mCurrentGyroZ)
+            # Log IMU data
+            self.mLogger.debug('Msg 2')
+            self.mLogger.info('X Acceleration: %.4f', self.mCurrentAccelX)
+            self.mLogger.info('X Gyroscope: %.4f', self.mCurrentGyroX)
+            self.mLogger.info('Y Acceleration: %.4f', self.mCurrentAccelY)
+            self.mLogger.info('Y Gyroscope: %.4f', self.mCurrentGyroY)
+            self.mLogger.info('Z Acceleration: %.4f', self.mCurrentAccelZ)
+            self.mLogger.info('Z Gyroscope: %.4f', self.mCurrentGyroZ)
+    else :
+        activeRead = False
+
+    self.mScheduler.enter(self.mRxInterval, 1, self.RfReceive)
+
+  def StartScheduler(self) :
+    # Schedule the initial run of functions
+    self.mScheduler.enter(0, 1, self.RfSend)
+    self.mScheduler.enter(0, 1, self.RfReceive)
+    
+    # Start the scheduler
+    self.mScheduler.run()
+
 
 #def testSend(count: int = 5):
 #    radio.listen = False  # ensures the nRF24L01 is in TX mode
@@ -163,15 +199,21 @@ loggerRf.addHandler(rfFileHandler)
 # Create rfManager object
 rfManager = RfManager(config['rfManager'], loggerRf)
 
-while(1) :
-  rfManager.RfReceive()
+# Send out initial fault cleared / startup message
+#rfManager.RfSend(StatusType.eFaultCleared, 0.0)
+#rfManager.RfSend(StatusType.eStartup, 0.0)
 
-batteryVoltage = 25.0
+rfManager.StartScheduler()
 
-rfManager.RfSend(StatusType.eFaultCleared, 0.0)
-for i in range(50) :
-  if (i < 25) :
-    batteryVoltage = batteryVoltage - .2
-  else :
-    batteryVoltage = batteryVoltage + .2
-  rfManager.RfSend(StatusType.eBatteryVolt, batteryVoltage)
+#while(1) :
+#  rfManager.RfReceive()
+
+#batteryVoltage = 25.0
+
+#rfManager.RfSend(StatusType.eFaultCleared, 0.0)
+#for i in range(50) :
+#  if (i < 25) :
+#    batteryVoltage = batteryVoltage - .2
+#  else :
+#    batteryVoltage = batteryVoltage + .2
+#  rfManager.RfSend(StatusType.eBatteryVolt, batteryVoltage)

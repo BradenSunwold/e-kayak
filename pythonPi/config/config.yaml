@@ -1,6 +1,6 @@
 ---
 rfManager:
-  rfReadDataRateInMilliseconds: 50
+  rfReadDataRateInMilliseconds: 10
   rfWriteDataRateInMilliseconds: 100
   rfLoggerVerbosityLevel: 1
   rfLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/rfLog.txt

@@ -5,4 +5,16 @@ rfManager:
   rfLoggerVerbosityLevel: 1
   rfLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/rfLog.txt
 motorManager:
+  motorCommandReadRateInMilliseconds: 50
+  motorCommandWriteRateInMilliseconds: 50   # Command motor at 20Hz for future controls
   maxCurrentInMilliAmps: 12000
+  numberOfSpeedSettings: 3
+  speedSettingToCurrentMapInPercent: # Number of elements here has to match numberOfSpeedSettings
+    - SpeedOne: 40.0
+    - SpeedTwo: 60.0
+    - SpeedThree: 90.0
+  underVoltage: 20
+  maxTemp: 60
+  faultClearTimeoutInMilliseconds: 2000   # How long does fault have to be cleared to unlatch
+  faultLatchTimeoutInMilliseconds: 1000   # How long does fault have to persist before latching
+  motorLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/motorLog.txt

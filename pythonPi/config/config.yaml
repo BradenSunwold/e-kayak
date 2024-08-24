@@ -6,15 +6,75 @@ rfManager:
   rfLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/rfLog.txt
 motorManager:
   motorCommandReadRateInMilliseconds: 50
-  motorCommandWriteRateInMilliseconds: 50   # Command motor at 20Hz for future controls
-  maxCurrentInMilliAmps: 12000
-  numberOfSpeedSettings: 3
-  speedSettingToCurrentMapInPercent: # Number of elements here has to match numberOfSpeedSettings
-    - SpeedOne: 40.0
-    - SpeedTwo: 60.0
-    - SpeedThree: 90.0
+  motorWriteRateInMilliseconds: 50   # Command motor at 20Hz for future controls
+  motorReadRateInMilliseconds: 100     # Read faults and battery level back from the motor at 10hz
+  # maxCurrentInMilliAmps: 12000
+  numberOfSpeedSettings: 4
+  # speedSettingToCurrentMapInPercent: # Number of elements here has to match numberOfSpeedSettings
+  #   - SpeedOne: 40.0
+  #   - SpeedTwo: 60.0
+  #   - SpeedThree: 90.0
+  maxRpms: 500 # 2145 corresponds to about 65% duty cycle and 12A current draw
+  speedSettingToRpmMapInPercent: # Number of elements here has to match numberOfSpeedSettings
+    - 0.0
+    - 50.0
+    - 75.0
+    - 95.0
   underVoltage: 20
   maxTemp: 60
+  rpmRateLimiterTaps:
+    - 0.0011717562511
+    - 0.00118645196169
+    - 0.001751114665836
+    - 0.00246171640561
+    - 0.003331290396343
+    - 0.004369894827737
+    - 0.005585101577759
+    - 0.006982005498582
+    - 0.008556679877935
+    - 0.01030363348141
+    - 0.01220983542279
+    - 0.01425746315399
+    - 0.0164232467676
+    - 0.01867756147032
+    - 0.02098739336328
+    - 0.02331439644142
+    - 0.02561861005545
+    - 0.02785701714719
+    - 0.02998619573899
+    - 0.03196290334687
+    - 0.03374568914916
+    - 0.03529649295377
+    - 0.03658110527252
+    - 0.03757112108351
+    - 0.03824401557956
+    - 0.03858447148785
+    - 0.03858447148785
+    - 0.03824401557956
+    - 0.03757112108351
+    - 0.03658110527252
+    - 0.03529649295377
+    - 0.03374568914916
+    - 0.03196290334687
+    - 0.02998619573899
+    - 0.02785701714719
+    - 0.02561861005545
+    - 0.02331439644142
+    - 0.02098739336328
+    - 0.01867756147032
+    - 0.0164232467676
+    - 0.01425746315399
+    - 0.01220983542279
+    - 0.01030363348141
+    - 0.008556679877935
+    - 0.006982005498582
+    - 0.005585101577759
+    - 0.004369894827737
+    - 0.003331290396343
+    - 0.00246171640561
+    - 0.001751114665836
+    - 0.00118645196169
+    - 0.0011717562511
+
   faultClearTimeoutInMilliseconds: 2000   # How long does fault have to be cleared to unlatch
-  faultLatchTimeoutInMilliseconds: 1000   # How long does fault have to persist before latching
   motorLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/motorLog.txt

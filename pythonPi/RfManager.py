@@ -70,10 +70,14 @@ class RfManager(threading.Thread):
     self.mRadio.open_rx_pipe(1, self.mAddress[not self.mRadioNumber])  
 
   def RfSend(self):
-    
-    status = StatusType.eBatteryVolt
-    data = 25.0
+   
+    # Read from motor status queue
+    newCommand = self.mIncomingQueue.get(timeout=.05)
     print("Writing")
+    
+    status, data = struct.unpack('hf', newCommand)
+    
+    # Send to oar
     self.mRadio.payload_size = struct.calcsize('hf') # Payload consists of status type and float value
     self.mRadio.listen = False  # ensures the nRF24L01 is in TX mode
     
@@ -104,7 +108,7 @@ class RfManager(threading.Thread):
         if(struct.unpack("B", received[:1])[0] == 1) :
             self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY = struct.unpack(self.mRfReceiveDataFormatMsgOne, received)
 
-            # Send new motor commands to the MotorManager thread
+            # Send new motor commands to the MotorManager thread 
             motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
             self.mOutgoingQueue.put(motorModeCommand)
             
@@ -133,6 +137,12 @@ class RfManager(threading.Thread):
             self.mLogger.info('Z Gyroscope: %.4f', self.mCurrentGyroZ)
     else :
         activeRead = False
+        
+        # If we don't get a new message within 8 seconds, trigger comms loss fault
+        if(time.time() - self.mPrevReadTimeStamp > 8) : 
+            commsLossCommand = struct.pack("?B", self.mCurrentMotorMode, -1)
+            self.mOutgoingQueue.put(commsLossCommand)
+            self.mLogger.info('RF Manager: ', "Comms loss triggered")
 
     self.mScheduler.enter(self.mRxInterval, 1, self.RfReceive)
 

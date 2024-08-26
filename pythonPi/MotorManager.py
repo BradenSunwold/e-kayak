@@ -15,7 +15,9 @@ import threading
 import queue
 import FIR
 
+from KayakDefines import StatusType
 from KayakDefines import MotorCmd
+from KayakDefines import VescFaultCodes
 
 
 class MotorManager(threading.Thread):
@@ -38,6 +40,9 @@ class MotorManager(threading.Thread):
         
         # Variables coming from motor
         self.mFaultCode = 0
+        self.mStatus = StatusType.eStartup
+        self.mRfStatus = StatusType.eFaultCleared
+        self.mFaultTime = 0
         self.mVoltage = 0.0
         self.mCurrentIn = 0.0
         self.mCurrentMotor = 0.0
@@ -78,13 +83,19 @@ class MotorManager(threading.Thread):
             newCommand = self.mIncomingQueue.get(timeout=.05)
             
             # Check what msg we got
-            tmpMode, tmpRpm = struct.unpack("?B", newCommand)
+            tmpMode, tmpRpm = struct.unpack('?B', newCommand)
             
             numberSpeeds = self.mConfigurator['numberOfSpeedSettings']
             
-            if(tmpRpm >= 0 and tmpRpm <= numberSpeeds) :
+            if(tmpRpm < 0) :
+                # We have triggered a comms loss fault from the RF manager
+                self.mRfStatus = StatusType.eComsLoss
+                self.mLogger.info('From RF Manager: ', "Received comms loss")
+            elif(tmpRpm >= 0 and tmpRpm <= numberSpeeds) :
                 self.mMode = tmpMode
                 self.mMotorSpeedManual = tmpRpm
+                
+                self.mRfStatus = StatusType.eFaultCleared   # Receiving valid cmds so clear coms fault
                 
                 self.mLogger.info('Oar Mode Comand: %s', self.mMode)
                 self.mLogger.info('Oar Speed Command: %s', self.mMotorSpeedManual)
@@ -102,8 +113,11 @@ class MotorManager(threading.Thread):
     def WriteMotor(self) :
         newRpmCommand = 0
         
-        # Check which mode we are in 
-        if self.mMode == 0 :
+        # If any faults active, latch RPM to 0
+        if (self.mRfStatus == StatusType.eComsLoss or self.mStatus == StatusType.eComsLoss or self.mStatus == StatusType.eHighCurrent or self.mStatus == StatusType.eLowBattery or self.mStatus == StatusType.eUnknownFault) :
+            self.mRPm = 0.0
+        # Check which mode we are in and calculate RPM
+        elif self.mMode == 0 :
             # We are in manual mode - use speed lookup table
             self.mRpm = (self.mSpeedSettingToRpmMap[self.mMotorSpeedManual] / 100) * self.mMaxRpms
         else :
@@ -140,6 +154,7 @@ class MotorManager(threading.Thread):
                 self.mPowerMotorIn = self.mVoltage * self.mCurrentIn
                 self.mRpmFeedback = response.rpm
                 
+                # Log motor values
                 self.mLogger.info('*** MOTOR STATUS ***:')
                 self.mLogger.info('Fet Temperature: %s', response.temp_fets)
                 self.mLogger.info('Duty Cycle: %s', response.duty_now)
@@ -151,10 +166,61 @@ class MotorManager(threading.Thread):
                 self.mLogger.info('Watt Hours: %s', response.watt_hours)
                 self.mLogger.info('Fault Code: %s', response.mc_fault_code)       
                 self.mLogger.info('Power: %s', self.mPowerMotorIn)  
+                self.mLogger.info('RF Status: %s', self.mRfStatus)
+                self.mLogger.info('Motor Status: %s', self.mStatus)
+                
+                # Send out battery status
+                if(self.mRfStatus != StatusType.eComsLoss and self.mStatus != StatusType.eComsLoss and self.mStatus != StatusType.eHighCurrent and self.mStatus != StatusType.eLowBattery and self.mStatus != StatusType.eUnknownFault) :
+                    # Only send out battery info if not faulted
+                    self.mStatus = StatusType.eBatteryVolt
+                    data = self.mVoltage
+                    
+                    payload = struct.pack('hf', self.mStatus, data)
+                    self.mOutgoingQueue.put(payload)
+                
+                # Check on any faults
+                if self.mFaultCode == VescFaultCodes.FAULT_CODE_NONE and self.mRfStatus != StatusType.eComsLoss:
+                    # If faults have been cleared for more than faultClearPersistence timer then update flag
+                    if (time.time() - self.mFaultTime > self.mFaultClearPersistence) and (self.mStatus == StatusType.eComsLoss or self.mStatus == StatusType.eHighCurrent or self.mStatus == StatusType.eLowBattery or self.mStatus == StatusType.eUnknownFault) : 
+                        
+                        # Init fault cleared sequence
+                        self.mStatus = StatusType.eFaultCleared       # Send fault cleared then startup commands to init oar fault reset
+                        data = 0.0                              # Pack emtpy data
+                        
+                        payload = struct.pack('hf', self.mStatus, data)
+                        self.mOutgoingQueue.put(payload)
+                        
+                        self.mStatus = StatusType.eStartup            
+                        payload = struct.pack('hf', self.mStatus, data)
+                        self.mOutgoingQueue.put(payload)
+                    
+                    else :
+                        # Keep sending out fault to keep coms connected 
+                        data = 0
+                        payload = struct.pack('hf', self.mStatus, data)
+                        self.mOutgoingQueue.put(payload)
+                        
+                else :
+                    # We have an active fault - check which one and set flags accordingly
+                    self.mFaultTime = time.time()
+                    
+                    # Check which fault - Let RF manager handling clearning comms loss fault, this is only motor faults
+                    if(self.mFaultCode == VescFaultCodes.FAULT_CODE_UNDER_VOLTAGE) :
+                        self.mStatus = StatusType.eLowBattery
+                    elif(self.mFaultCode == VescFaultCodes.FAULT_CODE_ABS_OVER_CURRENT) :
+                        self.mStatus = StatusType.eHighCurrent
+                    else :
+                        self.mStatus = StatusType.eUnknownFault
+                    
+                    # Send out fault
+                    data = 0
+                    payload = struct.pack('hf', self.mStatus, data)
+                    self.mOutgoingQueue.put(payload)
 
             except:
                 # Dont know what to do here
                 pass
+                
         self.mScheduler.enter(self.mMotorReadInterval, 1, self.ReadMotor)
     
     def StartScheduler(self) :

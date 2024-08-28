@@ -43,6 +43,7 @@ class MotorManager(threading.Thread):
         self.mStatus = StatusType.eStartup
         self.mRfStatus = StatusType.eFaultCleared
         self.mFaultTime = 0
+        self.mFaultLatched = False
         self.mVoltage = 0.0
         self.mCurrentIn = 0.0
         self.mCurrentMotor = 0.0
@@ -60,6 +61,9 @@ class MotorManager(threading.Thread):
         self.mUnderVoltage = self.mConfigurator['underVoltage']
         self.mMaxTemp = self.mConfigurator['maxTemp']
         self.mFaultClearPersistence = self.mConfigurator['faultClearTimeoutInMilliseconds']
+        self.mStartupReversalTimeout = self.mConfigurator['startupReverseTimeInMilliseconds']
+        self.mStartupLatched = True
+        self.mStartupTime = time.time()
 
         # Init RPM rate limiter
         self.mRateLimiterTaps = self.mConfigurator['rpmRateLimiterTaps']
@@ -111,19 +115,30 @@ class MotorManager(threading.Thread):
     
     # Update RPM speed based on received commands
     def WriteMotor(self) :
-        newRpmCommand = 0
-        
-        # If any faults active, latch RPM to 0
-        if (self.mRfStatus == StatusType.eComsLoss or self.mStatus == StatusType.eComsLoss or self.mStatus == StatusType.eHighCurrent or self.mStatus == StatusType.eLowBattery or self.mStatus == StatusType.eUnknownFault) :
-            self.mRPm = 0.0
+        # Check on faults 
+        if(self.mFaultLatched) :
+            self.mRpm = 0.0       # if any faults are latching, force to 0 no matter what
+            self.mLogger.info('Latching fault = 0 RPM')
+        elif (self.mRfStatus == StatusType.eComsLoss or self.mStatus == StatusType.eComsLoss or self.mStatus == StatusType.eHighCurrent or self.mStatus == StatusType.eLowBattery or self.mStatus == StatusType.eUnknownFault) :
+            self.mRpm = 0.0
+            self.mLogger.info('Soft fault = 0 RPM')
         # Check which mode we are in and calculate RPM
         elif self.mMode == 0 :
             # We are in manual mode - use speed lookup table
             self.mRpm = (self.mSpeedSettingToRpmMap[self.mMotorSpeedManual] / 100) * self.mMaxRpms
+            self.mLogger.info('In Mode 0')
         else :
             # Use estimated speed based on ML model
             # self.mRpm = self.mEstimatedSpeed
-            self.mRpm = self.mMotorSpeedManual      # For now, force manual mode 
+            self.mMode = 0      # For now, force manual mode 
+            self.mLogger.info('Force Mode 0')
+            
+        # If we are in a startup, ignore all faults and commands - Force a reversal for X seconds
+        if(self.mStartupLatched == True) :
+            self.mRpm = (self.mSpeedSettingToRpmMap[1] / 100) * self.mMaxRpms * -1
+            if(time.time() - self.mStartupTime > (self.mStartupReversalTimeout / 1000)) :
+                self.mStartupLatched = False
+                self.mLogger.info('Exiting Startup Reversal')
             
         # Send RPM command to the motor
         self.mLogger.info('Rpm Step Command: %s', self.mRpm)
@@ -175,17 +190,24 @@ class MotorManager(threading.Thread):
                     self.mStatus = StatusType.eBatteryVolt
                     data = self.mVoltage
                     
+                    self.mLogger.info('Sending Battery Status: %s', self.mVoltage)
                     payload = struct.pack('hf', self.mStatus, data)
                     self.mOutgoingQueue.put(payload)
                 
-                # Check on any faults
-                if self.mFaultCode == VescFaultCodes.FAULT_CODE_NONE and self.mRfStatus != StatusType.eComsLoss:
+                # Check on any faults - For some reason this is not entering when no faults are present
+                if int.from_bytes(self.mFaultCode, byteorder='big') == VescFaultCodes.FAULT_CODE_NONE and self.mRfStatus != StatusType.eComsLoss:
+                    self.mLogger.info('No Faults')
                     # If faults have been cleared for more than faultClearPersistence timer then update flag
-                    if (time.time() - self.mFaultTime > self.mFaultClearPersistence) and (self.mStatus == StatusType.eComsLoss or self.mStatus == StatusType.eHighCurrent or self.mStatus == StatusType.eLowBattery or self.mStatus == StatusType.eUnknownFault) : 
+                    if (self.mFaultLatched == False and time.time() - self.mFaultTime > (self.mFaultClearPersistence / 1000)) and (self.mStatus == StatusType.eComsLoss or self.mStatus == StatusType.eHighCurrent or self.mStatus == StatusType.eLowBattery or self.mStatus == StatusType.eUnknownFault) : 
+                        
+                        # If we are clearing high current fault then decrement max rpm 
+                        if (self.mStatus == StatusType.eHighCurrent) :
+                            self.mMaxRpms -= 5
+                            self.mLogger.info('New Max RPM: %s', self.mMaxRpms)
                         
                         # Init fault cleared sequence
                         self.mStatus = StatusType.eFaultCleared       # Send fault cleared then startup commands to init oar fault reset
-                        data = 0.0                              # Pack emtpy data
+                        data = 0.0                                    # Pack emtpy data
                         
                         payload = struct.pack('hf', self.mStatus, data)
                         self.mOutgoingQueue.put(payload)
@@ -193,6 +215,10 @@ class MotorManager(threading.Thread):
                         self.mStatus = StatusType.eStartup            
                         payload = struct.pack('hf', self.mStatus, data)
                         self.mOutgoingQueue.put(payload)
+                        
+                        self.mStartupLatched = True
+                        self.mStartupTime = time.time()
+                        self.mLogger.info('Entering Startup Reversal')
                     
                     else :
                         # Keep sending out fault to keep coms connected 
@@ -205,12 +231,18 @@ class MotorManager(threading.Thread):
                     self.mFaultTime = time.time()
                     
                     # Check which fault - Let RF manager handling clearning comms loss fault, this is only motor faults
-                    if(self.mFaultCode == VescFaultCodes.FAULT_CODE_UNDER_VOLTAGE) :
+                    if(int.from_bytes(self.mFaultCode, byteorder='big') == VescFaultCodes.FAULT_CODE_UNDER_VOLTAGE) :
                         self.mStatus = StatusType.eLowBattery
-                    elif(self.mFaultCode == VescFaultCodes.FAULT_CODE_ABS_OVER_CURRENT) :
+                        self.mFaultLatched = True
+                    elif(int.from_bytes(self.mFaultCode, byteorder='big') == VescFaultCodes.FAULT_CODE_ABS_OVER_CURRENT) :
                         self.mStatus = StatusType.eHighCurrent
+                    elif(self.mRfStatus == StatusType.eComsLoss) :
+                        self.mStatus = StatusType.eComsLoss
                     else :
                         self.mStatus = StatusType.eUnknownFault
+                       
+                    self.mLogger.info('Sending RF fault: ') 
+                    self.mLogger.info('Kayak Fault: %s', self.mStatus)
                     
                     # Send out fault
                     data = 0
@@ -228,7 +260,7 @@ class MotorManager(threading.Thread):
         print(self.mScheduler.enter)
         self.mScheduler.enter(0, 1, self.ReadCommands)
         self.mScheduler.enter(0, 1, self.WriteMotor)
-        # self.mScheduler.enter(0, 1, self.ReadMotor)
+        self.mScheduler.enter(0, 1, self.ReadMotor)
     
         # Start the scheduler
         self.mScheduler.run()

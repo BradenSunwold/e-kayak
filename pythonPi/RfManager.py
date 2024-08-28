@@ -48,10 +48,10 @@ class RfManager(threading.Thread):
 
     # Parse configs
     self.mConfigurator = configDictionary
-    self.mReadDataRate = self.mConfigurator['rfReadDataRateInMilliseconds']
-    print(self.mReadDataRate)
-    self.mWriteDataRate = self.mConfigurator['rfWriteDataRateInMilliseconds']
-    print(self.mWriteDataRate)
+    # self.mReadDataRate = self.mConfigurator['rfReadDataRateInMilliseconds']
+    # print(self.mReadDataRate)
+    # self.mWriteDataRate = self.mConfigurator['rfWriteDataRateInMilliseconds']
+    # print(self.mWriteDataRate)
 
     self.mScheduler = sched.scheduler(time.time, time.sleep)
     self.mRxInterval = self.mConfigurator['rfReadDataRateInMilliseconds'] / 1000 
@@ -60,7 +60,7 @@ class RfManager(threading.Thread):
     # Set up radio for coms
     self.mRadio = RF24(22, 0)
     self.mAddress = [b"1Node", b"2Node"]
-    self.mRadioNumber = 1;
+    self.mRadioNumber = 1
 
     if not self.mRadio.begin():
       raise OSError("nRF24L01 hardware isn't responding")
@@ -72,17 +72,24 @@ class RfManager(threading.Thread):
   def RfSend(self):
    
     # Read from motor status queue
-    newCommand = self.mIncomingQueue.get(timeout=.05)
-    print("Writing")
-    
-    status, data = struct.unpack('hf', newCommand)
-    
-    # Send to oar
-    self.mRadio.payload_size = struct.calcsize('hf') # Payload consists of status type and float value
-    self.mRadio.listen = False  # ensures the nRF24L01 is in TX mode
-    
-    payload = struct.pack('hf', status, data)
-    result = self.mRadio.write(payload)
+    try :
+      newCommand = self.mIncomingQueue.get(timeout=.05)
+      print("Writing")
+      
+      status, data = struct.unpack('hf', newCommand)
+      
+      # Send to oar
+      self.mRadio.payload_size = struct.calcsize('hf') # Payload consists of status type and float value
+      self.mRadio.listen = False  # ensures the nRF24L01 is in TX mode
+      
+      payload = struct.pack('hf', status, data)
+      self.mLogger.info('RF sending status: %s', status)
+      self.mLogger.info('RF sending data: %s', data)
+      
+      result = self.mRadio.write(payload)
+      
+    except :
+      print("Queue is empty after timeout. No new motor status")
 
     self.mScheduler.enter(self.mTxInterval, 1, self.RfSend)
 
@@ -139,10 +146,10 @@ class RfManager(threading.Thread):
         activeRead = False
         
         # If we don't get a new message within 8 seconds, trigger comms loss fault
-        if(time.time() - self.mPrevReadTimeStamp > 8) : 
-            commsLossCommand = struct.pack("?B", self.mCurrentMotorMode, -1)
-            self.mOutgoingQueue.put(commsLossCommand)
-            self.mLogger.info('RF Manager: ', "Comms loss triggered")
+        # if(time.time() - self.mPrevReadTimeStamp > 8) : 
+        #     commsLossCommand = struct.pack("?B", self.mCurrentMotorMode, -1)
+        #     self.mOutgoingQueue.put(commsLossCommand)
+        #     self.mLogger.info('RF Manager: ', "Comms loss triggered")
 
     self.mScheduler.enter(self.mRxInterval, 1, self.RfReceive)
 

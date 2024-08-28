@@ -1,13 +1,14 @@
 ---
 rfManager:
   rfReadDataRateInMilliseconds: 10
-  rfWriteDataRateInMilliseconds: 100
+  rfWriteDataRateInMilliseconds: 50
   rfLoggerVerbosityLevel: 1
   rfLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/rfLog.txt
 motorManager:
   motorCommandReadRateInMilliseconds: 50
   motorWriteRateInMilliseconds: 50   # Command motor at 20Hz for future controls
   motorReadRateInMilliseconds: 100     # Read faults and battery level back from the motor at 10hz
+  startupReverseTimeInMilliseconds: 4000
   # maxCurrentInMilliAmps: 12000
   numberOfSpeedSettings: 4
   # speedSettingToCurrentMapInPercent: # Number of elements here has to match numberOfSpeedSettings

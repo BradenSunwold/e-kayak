@@ -220,11 +220,12 @@ class MotorManager(threading.Thread):
                         self.mStartupTime = time.time()
                         self.mLogger.info('Entering Startup Reversal')
                     
-                    else :
-                        # Keep sending out fault to keep coms connected 
-                        data = 0
-                        payload = struct.pack('hf', self.mStatus, data)
-                        self.mOutgoingQueue.put(payload)
+                    # Don't think I need to keep sending faults - one is enough. Plus this could 0 battery data if no faults were present
+                    # else :
+                        # # Keep sending out fault to keep coms connected 
+                        # data = 0
+                        # payload = struct.pack('hf', self.mStatus, data)
+                        # self.mOutgoingQueue.put(payload)
                         
                 else :
                     # We have an active fault - check which one and set flags accordingly

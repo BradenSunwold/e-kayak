@@ -778,12 +778,32 @@ static void LedPixelUpdaterTask( void *pvParameters )
 static void RfOutputTask( void *pvParameters )
 {
   StateMsg_t stateDataOut;
-  FullImuDataSet_t imuDataOut;
 
+  // Initialize state data
+  stateDataOut.fAutoMode = false;
+  stateDataOut.fSpeed = 0;
+
+  FullImuDataSet_t imuDataOut;
   RfOutputMsgFirstHalf_t outputMsgFirstHalf;
   RfOutputMsgSecondHalf_t outputMsgSecondHalf;
+
+  // initialize IMU data
+  imuDataOut.fEulerData.fRoll = 0.0;
+  imuDataOut.fEulerData.fPitch = 0.0;
+  imuDataOut.fEulerData.fYaw = 0.0;
+  imuDataOut.fAddReportsVect.fX.fAccel = 0.0;
+  imuDataOut.fAddReportsVect.fX.fGyro = 0.0;
+  imuDataOut.fAddReportsVect.fY.fAccel = 0.0;
+  imuDataOut.fAddReportsVect.fY.fGyro = 0.0;
+  imuDataOut.fAddReportsVect.fZ.fAccel = 0.0;
+  imuDataOut.fAddReportsVect.fZ.fGyro = 0.0;
+
   outputMsgFirstHalf.fMessageIndex_1 = 1;
+  outputMsgFirstHalf.fOutputState = stateDataOut;
+  outputMsgFirstHalf.fOutputImuEuler = imuDataOut.fEulerData;
+
   outputMsgSecondHalf.fMessageIndex_2 = 2;
+  outputMsgSecondHalf.fOutputImuAddReports = imuDataOut.fAddReportsVect;
 
 
   while(1)

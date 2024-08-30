@@ -41,7 +41,7 @@ sh2_SensorValue_t sensorValue;
 #define BUTTON_PIN 12
 #define POWER_HOLD 13
 
-#define VBATPIN A7
+#define VBATPIN A0
 
 // #define configUSE_IDLE_HOOK 1
 
@@ -905,7 +905,7 @@ void setup()
   // SETUP NEOPIXELS
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels ASAP
-  strip.setBrightness(25); // Set BRIGHTNESS to about 1/5 (max = 255)
+  strip.setBrightness(45); // Set BRIGHTNESS to about 1/5 (max = 255)
 
   // Create queues
   rfInMsgQueue = xQueueCreate(msgQueueLength, sizeof(StatusMsg_t));

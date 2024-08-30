@@ -31,7 +31,7 @@ class RfManager(threading.Thread):
     self.mCurrentMotorMode = 0
     self.mCurrentMotorSpeed = 0
 
-    self.mPrevReadTimeStamp = 0
+    self.mPrevReadTimeStamp = time.time()
     self.mDataRate = 0
 
     # IMU member vars
@@ -143,13 +143,13 @@ class RfManager(threading.Thread):
             self.mLogger.info('Z Acceleration: %.4f', self.mCurrentAccelZ)
             self.mLogger.info('Z Gyroscope: %.4f', self.mCurrentGyroZ)
     else :
-        activeRead = False
+      activeRead = False
         
-        # If we don't get a new message within 8 seconds, trigger comms loss fault
-        # if(time.time() - self.mPrevReadTimeStamp > 8) : 
-        #     commsLossCommand = struct.pack("?B", self.mCurrentMotorMode, -1)
-        #     self.mOutgoingQueue.put(commsLossCommand)
-        #     self.mLogger.info('RF Manager: ', "Comms loss triggered")
+      # If we don't get a new message within 7 seconds, trigger comms loss fault
+      if(time.time() - self.mPrevReadTimeStamp > 7) : 
+        commsLossCommand = struct.pack("?B", self.mCurrentMotorMode, 255)
+        self.mOutgoingQueue.put(commsLossCommand)
+        self.mLogger.info("Comms loss triggered")
 
     self.mScheduler.enter(self.mRxInterval, 1, self.RfReceive)
 

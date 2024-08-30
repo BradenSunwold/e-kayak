@@ -91,10 +91,10 @@ class MotorManager(threading.Thread):
             
             numberSpeeds = self.mConfigurator['numberOfSpeedSettings']
             
-            if(tmpRpm < 0) :
+            if(tmpRpm == 255) :
                 # We have triggered a comms loss fault from the RF manager
                 self.mRfStatus = StatusType.eComsLoss
-                self.mLogger.info('From RF Manager: ', "Received comms loss")
+                self.mLogger.info("Received comms loss")
             elif(tmpRpm >= 0 and tmpRpm <= numberSpeeds) :
                 self.mMode = tmpMode
                 self.mMotorSpeedManual = tmpRpm
@@ -198,34 +198,35 @@ class MotorManager(threading.Thread):
                 if int.from_bytes(self.mFaultCode, byteorder='big') == VescFaultCodes.FAULT_CODE_NONE and self.mRfStatus != StatusType.eComsLoss:
                     self.mLogger.info('No Faults')
                     # If faults have been cleared for more than faultClearPersistence timer then update flag
-                    if (self.mFaultLatched == False and time.time() - self.mFaultTime > (self.mFaultClearPersistence / 1000)) and (self.mStatus == StatusType.eComsLoss or self.mStatus == StatusType.eHighCurrent or self.mStatus == StatusType.eLowBattery or self.mStatus == StatusType.eUnknownFault) : 
+                    if self.mFaultLatched == False and (self.mStatus == StatusType.eComsLoss or self.mStatus == StatusType.eHighCurrent or self.mStatus == StatusType.eLowBattery or self.mStatus == StatusType.eUnknownFault) : 
                         
-                        # If we are clearing high current fault then decrement max rpm 
-                        if (self.mStatus == StatusType.eHighCurrent) :
-                            self.mMaxRpms -= 5
-                            self.mLogger.info('New Max RPM: %s', self.mMaxRpms)
-                        
-                        # Init fault cleared sequence
-                        self.mStatus = StatusType.eFaultCleared       # Send fault cleared then startup commands to init oar fault reset
-                        data = 0.0                                    # Pack emtpy data
-                        
-                        payload = struct.pack('hf', self.mStatus, data)
-                        self.mOutgoingQueue.put(payload)
-                        
-                        self.mStatus = StatusType.eStartup            
-                        payload = struct.pack('hf', self.mStatus, data)
-                        self.mOutgoingQueue.put(payload)
-                        
-                        self.mStartupLatched = True
-                        self.mStartupTime = time.time()
-                        self.mLogger.info('Entering Startup Reversal')
-                    
-                    # Don't think I need to keep sending faults - one is enough. Plus this could 0 battery data if no faults were present
-                    # else :
-                        # # Keep sending out fault to keep coms connected 
-                        # data = 0
-                        # payload = struct.pack('hf', self.mStatus, data)
-                        # self.mOutgoingQueue.put(payload)
+                        # We had a fault that is cleared, now ensure it stays cleared for X seconds
+                        if (time.time() - self.mFaultTime) > (self.mFaultClearPersistence / 1000) :
+                            # If we are clearing high current fault then decrement max rpm 
+                            if (self.mStatus == StatusType.eHighCurrent) :
+                                self.mMaxRpms -= 5
+                                self.mLogger.info('New Max RPM: %s', self.mMaxRpms)
+                            
+                            # Init fault cleared sequence
+                            self.mStatus = StatusType.eFaultCleared       # Send fault cleared then startup commands to init oar fault reset
+                            data = 0.0                                    # Pack emtpy data
+                            
+                            payload = struct.pack('hf', self.mStatus, data)
+                            self.mOutgoingQueue.put(payload)
+                            
+                            self.mStatus = StatusType.eStartup            
+                            payload = struct.pack('hf', self.mStatus, data)
+                            self.mOutgoingQueue.put(payload)
+                            
+                            self.mStartupLatched = True
+                            self.mStartupTime = time.time()
+                            self.mLogger.info('Entering Startup Reversal')
+                            
+                        else :
+                            # Keep sending out fault to keep coms connected 
+                            data = 0
+                            payload = struct.pack('hf', self.mStatus, data)
+                            self.mOutgoingQueue.put(payload)
                         
                 else :
                     # We have an active fault - check which one and set flags accordingly
@@ -237,10 +238,13 @@ class MotorManager(threading.Thread):
                         self.mFaultLatched = True
                     elif(int.from_bytes(self.mFaultCode, byteorder='big') == VescFaultCodes.FAULT_CODE_ABS_OVER_CURRENT) :
                         self.mStatus = StatusType.eHighCurrent
+                        self.mFaultLatched = True
                     elif(self.mRfStatus == StatusType.eComsLoss) :
                         self.mStatus = StatusType.eComsLoss
+                        self.mFaultLatched = True
                     else :
                         self.mStatus = StatusType.eUnknownFault
+                        self.mFaultLatched = True
                        
                     self.mLogger.info('Sending RF fault: ') 
                     self.mLogger.info('Kayak Fault: %s', self.mStatus)

@@ -24,7 +24,8 @@ class MotorManager(threading.Thread):
     def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue):
         super().__init__()
         self.mLogger = logger
-        self.mLogger.info('Motor Manager Starting Up') 
+        self.mLogger.info('**** Motor Manager Starting Up *****') 
+        self.mLogger.info('*************************************') 
         
         # Init member variables
         self.mRpm = 0.0
@@ -59,6 +60,7 @@ class MotorManager(threading.Thread):
         # Saves array of same size as numberOfSpeedSettings
         self.mSpeedSettingToRpmMap = self.mConfigurator['speedSettingToRpmMapInPercent']     
         self.mUnderVoltage = self.mConfigurator['underVoltage']
+        self.mVoltageOffset = self.mConfigurator['batteryCalibrationOffset']
         self.mMaxTemp = self.mConfigurator['maxTemp']
         self.mFaultClearPersistence = self.mConfigurator['faultClearTimeoutInMilliseconds']
         self.mStartupReversalTimeout = self.mConfigurator['startupReverseTimeInMilliseconds']
@@ -161,7 +163,7 @@ class MotorManager(threading.Thread):
             try : 
                 # Store motor values 
                 self.mFaultCode = response.mc_fault_code
-                self.mVoltage = response.v_in
+                self.mVoltage = response.v_in + self.mVoltageOffset
                 self.mCurrentIn = response.current_in
                 self.mCurrentMotor = response.current_motor
                 self.mDutyCycle = response.duty_now
@@ -174,7 +176,8 @@ class MotorManager(threading.Thread):
                 self.mLogger.info('Fet Temperature: %s', response.temp_fets)
                 self.mLogger.info('Duty Cycle: %s', response.duty_now)
                 self.mLogger.info('RPM: %s', response.rpm)
-                self.mLogger.info('Input Voltage: %s', response.v_in)
+                self.mLogger.info('VESC measured Input Voltage: %s', response.v_in)
+                self.mLogger.info('Calibrated Input Voltage: %s', self.mVoltage)
                 self.mLogger.info('Current In: %s', response.current_in)
                 self.mLogger.info('Motor Current: %s', response.current_motor)
                 self.mLogger.info('Amp Hours: %s', response.amp_hours)

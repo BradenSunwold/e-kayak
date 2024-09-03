@@ -8,20 +8,21 @@ motorManager:
   motorCommandReadRateInMilliseconds: 50
   motorWriteRateInMilliseconds: 50   # Command motor at 20Hz for future controls
   motorReadRateInMilliseconds: 100     # Read faults and battery level back from the motor at 10hz
-  startupReverseTimeInMilliseconds: 4000
+  startupReverseTimeInMilliseconds: 7000
   # maxCurrentInMilliAmps: 12000
   numberOfSpeedSettings: 4
   # speedSettingToCurrentMapInPercent: # Number of elements here has to match numberOfSpeedSettings
   #   - SpeedOne: 40.0
   #   - SpeedTwo: 60.0
   #   - SpeedThree: 90.0
-  maxRpms: 500 # 2145 corresponds to about 65% duty cycle and 12A current draw
+  maxRpms: 2145 # 2145 corresponds to about 65% duty cycle and 12A current draw
   speedSettingToRpmMapInPercent: # Number of elements here has to match numberOfSpeedSettings
     - 0.0
-    - 50.0
-    - 75.0
-    - 95.0
+    - 60.0
+    - 80.0
+    - 90.0
   underVoltage: 20
+  batteryCalibrationOffset: .8    # VESC battery monitor ~.7 - .8V off from measured battery voltage
   maxTemp: 60
   rpmRateLimiterTaps:
     - 0.0011717562511

@@ -20,7 +20,8 @@ class RfManager(threading.Thread):
   def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue):
     super().__init__()
     self.mLogger = logger
-    self.mLogger.info('RF Manager Starting Up')
+    self.mLogger.info('**** Motor Manager Starting Up *****') 
+    self.mLogger.info('*************************************') 
 
     # Initialize class member variables
     self.mIncomingQueue = incomingQueue

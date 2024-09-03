@@ -611,8 +611,8 @@ static void ProcessOutputsTask( void *pvParameters )
     oarBatteryVoltage /= 1024;     // convert to voltage
 
     // Normalize battery voltages between 0 - 100% - equation based on voltage curves
-    float kayakBatteryPercentage = (1.0558 * (kayakBatteryVolt * kayakBatteryVolt * kayakBatteryVolt)) - (70.84 * (kayakBatteryVolt * kayakBatteryVolt)) 
-                                                  + (1581.1 * kayakBatteryVolt) - 11733;
+    float kayakBatteryPercentage = (1.0234 * (kayakBatteryVolt * kayakBatteryVolt * kayakBatteryVolt)) - (69.144 * (kayakBatteryVolt * kayakBatteryVolt)) 
+                                                  + (1556 * kayakBatteryVolt) - 11654;
     if(kayakBatteryPercentage > 100)
     {
       kayakBatteryPercentage = 100;

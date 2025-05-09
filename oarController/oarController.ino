@@ -183,6 +183,9 @@ TaskHandle_t Handle_StateManagerTask;
 TaskHandle_t Handle_RfOutputTask;
 TaskHandle_t Handle_LedPixelUpdaterTask;
 
+// Test tasks
+TaskHandle_t Handle_LedPixelUpdaterTester;
+
 //**************************************************************************
 // Can use these function for RTOS delays
 // Takes into account processor speed
@@ -544,7 +547,7 @@ static void ProcessOutputsTask( void *pvParameters )
         case eUnknownFault :
           // faults take priority
           Serial.println("FAULT");
-          LoadErrorAnnimation(ledMsg);  // Set pixel map
+          LoadErrorAnnimation(ledMsg, 75, 0);  // Set pixel map
 
           // Add to led queue
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -553,7 +556,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
         // Then check for fault cleared
         case eFaultCleared :
-          LoadConnectedAnnimation(ledMsg);  // Set pixel map
+          LoadConnectedAnnimation(ledMsg, 75, 1);  // Set pixel map
 
           // Add to led queue
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -569,7 +572,7 @@ static void ProcessOutputsTask( void *pvParameters )
             if(!startupConnected)
             {
               // First load connnected annimation before startup annimation
-              LoadConnectedAnnimation(ledMsg);
+              LoadConnectedAnnimation(ledMsg, 75, 1);
               Serial.println("Connected");
 
               xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -578,7 +581,7 @@ static void ProcessOutputsTask( void *pvParameters )
             else
             {
               // Now load startup annimation after connected annimation
-              LoadStartupAnnimation(ledMsg);
+              LoadStartupAnnimation(ledMsg, 80, 1);
               Serial.println("Startup");
 
               xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -592,7 +595,7 @@ static void ProcessOutputsTask( void *pvParameters )
         case eStartup :
           startup = true;
           startupConnected = false;
-          LoadConnectingAnnimation(ledMsg);
+          LoadConnectingAnnimation(ledMsg, 50, 1);
 
           // Add to led queue
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -644,7 +647,7 @@ static void ProcessOutputsTask( void *pvParameters )
     if(!fault && !startup && batteryPercentageReport != prevBatteryPercentage)
     {
       // Only send new battery status if battery level has changed
-      LoadGaugeUpdateAnnimation(ledMsg, speed, batteryPercentageReport);
+      LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
       // Serial.println("Sending battery Update to LED");
 
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -662,7 +665,7 @@ static void ProcessOutputsTask( void *pvParameters )
         if(!fault && !startup)
         {
           // Only report to LED driver / RF output if we arn't currently faulted
-          LoadModeChangeAnnimation(ledMsg);
+          LoadModeChangeAnnimation(ledMsg, 75, 2);
           Serial.print("Mode: ");
           Serial.println(stateMsg.fAutoMode);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -677,7 +680,7 @@ static void ProcessOutputsTask( void *pvParameters )
         if(!fault && !startup)
         {
           // Only report to LED driver / RF output if we arn't currently faulted
-          LoadGaugeUpdateAnnimation(ledMsg, speed, batteryPercentageReport);
+          LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
           Serial.print("Speed: ");
           Serial.println(stateMsg.fSpeed);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -705,11 +708,11 @@ static void LedPixelUpdaterTask( void *pvParameters )
   LedMap_t pixelMap;
 
   // Set default pixel map to connecting annimation sequence
-  LoadConnectingAnnimation(pixelMap);
+  LoadConnectingAnnimation(pixelMap, 50, 1);
 
   // Mechanism to track when next annimation update should be  
   volatile TickType_t currPixelTimeout = xTaskGetTickCount();
-  volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);  
+  volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);  
 
   volatile int cycleCount = 0;    // Counter to track 12 cycle counter
   volatile int taskDelay = 25;
@@ -726,13 +729,16 @@ static void LedPixelUpdaterTask( void *pvParameters )
       if(xQueueReceive(ledPixelMapQueue, (void *)&pixelMap, 0) == pdTRUE)
       {
         // Read from pixel map queue and update annimation struct
-        nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);    // Reset next annimation timeout
+        nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);    // Reset next annimation timeout
         cycleCount = 0;
+        Serial.println("New pixel map command");
       }
     }
 
+    // Update Cycle counters
     if(cycleCount >= strip.numPixels())
     {
+      Serial.println(cycleCount);
       cycleCount = 0;
 
       // Check if annimation is done blocking
@@ -746,7 +752,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
       }
     }
 
-    // UPDATE HERE TO READ NEW TIME
+    // Update strip if time 
     if(currPixelTimeout = xTaskGetTickCount() >= nextPixelTimeout)
     {
       // Serial.println("tock");
@@ -757,7 +763,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
         strip.show();
       }
 
-      nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelay / portTICK_PERIOD_MS);  // Reset next annimation timeout
+      nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);  // Reset next annimation timeout
       cycleCount++;
     }
 
@@ -768,6 +774,77 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
     // beginTime = millis();
     myDelayMs(taskDelay);    // Execute task at 100Hz
+    // taskTime = millis() - beginTime;
+    // Serial.println(taskTime);
+  }
+
+  Serial.println("Task Monitor: Deleting");
+  vTaskDelete( NULL );
+}
+
+static void LedPixelUpdaterTester( void *pvParameters )
+{
+  // Mechanisms to track when to push Pixel maps into queues
+  uint32_t queueInsertDelayInMs = 500;   // Delay between pushing each pixel map to queue
+  uint32_t loadNextSetDelayInMs = 7000;   // Delay between loading full next set of pixel map transitions - should be greater than queueInsertDelay * totalAnimations
+
+  volatile TickType_t nextQueueInsertTimeout = xTaskGetTickCount() + (queueInsertDelayInMs / portTICK_PERIOD_MS); 
+  volatile TickType_t nextSetLoadTimeout = xTaskGetTickCount() + (loadNextSetDelayInMs / portTICK_PERIOD_MS); 
+
+  // Load pixel maps
+  LoadConnectingAnnimation(pixelMapList[0], 50, 1);
+  LoadConnectedAnnimation(pixelMapList[1], 75, 1);
+  LoadErrorAnnimation(pixelMapList[2], 75, 0);
+  LoadModeChangeAnnimation(pixelMapList[3], 75, 2);
+  LoadStartupAnnimation(pixelMapList[4], 80, 1);
+  LoadGaugeUpdateAnnimation(pixelMapList[5], 200, 0, 1, 50);
+
+  // index to track map transitions
+  uint32_t index = 0;
+  bool insertFlag = false;
+
+  while(1)
+  {
+    // If ready for next set of pixel map transitions
+    if(xTaskGetTickCount() >= nextSetLoadTimeout)
+    {
+      // Serial.println("Set Insert");
+      insertFlag = true;
+
+      // Reset load timeout
+      nextSetLoadTimeout = xTaskGetTickCount() + (loadNextSetDelayInMs / portTICK_PERIOD_MS); 
+    }
+
+    // If ready to insert, insert next index once delay has been met
+    if(insertFlag)
+    {
+      if(xTaskGetTickCount() >= nextQueueInsertTimeout)
+      {
+        // Insert
+        // Serial.println("Queue Insert");
+        xQueueSend(ledPixelMapQueue, (void *)&pixelMapList[index], 1);
+
+        index++;
+
+        // Reset next queue timeout
+        nextQueueInsertTimeout = xTaskGetTickCount() + (queueInsertDelayInMs / portTICK_PERIOD_MS); 
+      }
+
+      // If we have inserted full queue, lower flag
+      if(index >= totalAnimations)
+      {
+        index = 0;
+        insertFlag = false;
+      }
+    }
+
+    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
+    // Serial.println(uxHighWaterMark);
+    
+    // count = 0;
+
+    // beginTime = millis();
+    myDelayMs(50);   // execute task at 10 Hz
     // taskTime = millis() - beginTime;
     // Serial.println(taskTime);
   }
@@ -918,13 +995,17 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Create tasks
-  xTaskCreate(ReadRfTask, "Read in", 88, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);
-  xTaskCreate(ReadImuTask, "Read in", 184, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);
-  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);
-  xTaskCreate(StateManagerTask, "Kayak State", 84, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);
-  xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);
-  xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);
+  // xTaskCreate(ReadRfTask, "Read in", 88, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);
+  // xTaskCreate(ReadImuTask, "Read in", 184, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);
+  // xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);
+  // xTaskCreate(StateManagerTask, "Kayak State", 84, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);
+  // xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);
+  // xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 232, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);
+
+  // Test tasks
+   xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
+  
 
   Serial.println("");
   Serial.println("******************************");
@@ -954,16 +1035,8 @@ void loop()
 }
 
 // Support annimation functions
-void LoadConnectingAnnimation(LedMap_t &pixelMap)
+void LoadConnectingAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
 {
-  // for(int i = 0; i < strip.numPixel(); i++)
-  // {
-  //   for()
-  //   {
-  //     pixelMap.fPixelColor[i][j] = strip.Color(0, 255, 0);
-  //   }
-  // }
-
   memcpy(&pixelMap.fPixelColor[0][0], &connectSequenceZero, sizeof(connectSequenceZero));
   memcpy(&pixelMap.fPixelColor[1][0], &connectSequenceOne, sizeof(connectSequenceOne));
   memcpy(&pixelMap.fPixelColor[2][0], &connectSequenceTwo, sizeof(connectSequenceTwo));
@@ -977,11 +1050,11 @@ void LoadConnectingAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[10][0], &connectSequenceTen, sizeof(connectSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &connectSequenceEleven, sizeof(connectSequenceEleven));
 
-  pixelMap.fDelay = 50;
-  pixelMap.fNumCyclesBlock = 1;
+  pixelMap.fDelayInMs = delayTime; // 50
+  pixelMap.fNumCyclesBlock = blockingCycles;  // 1
 }
 
-void LoadConnectedAnnimation(LedMap_t &pixelMap)
+void LoadConnectedAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
 {
   memcpy(&pixelMap.fPixelColor[0][0], &connectedSequenceZero, sizeof(connectedSequenceZero));
   memcpy(&pixelMap.fPixelColor[1][0], &connectedSequenceOne, sizeof(connectedSequenceOne));
@@ -996,11 +1069,11 @@ void LoadConnectedAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[10][0], &connectedSequenceTen, sizeof(connectedSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &connectedSequenceEleven, sizeof(connectedSequenceEleven));
 
-  pixelMap.fDelay = 75;
-  pixelMap.fNumCyclesBlock = 1;
+  pixelMap.fDelayInMs = delayTime;  //75 
+  pixelMap.fNumCyclesBlock = blockingCycles; // 1
 }
 
-void LoadErrorAnnimation(LedMap_t &pixelMap)
+void LoadErrorAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
 {
   memcpy(&pixelMap.fPixelColor[0][0], &errorSequenceZero, sizeof(errorSequenceZero));
   memcpy(&pixelMap.fPixelColor[1][0], &errorSequenceOne, sizeof(errorSequenceOne));
@@ -1015,11 +1088,11 @@ void LoadErrorAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[10][0], &errorSequenceTen, sizeof(errorSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &errorSequenceEleven, sizeof(errorSequenceEleven));
 
-  pixelMap.fDelay = 75;
-  pixelMap.fNumCyclesBlock = 0;
+  pixelMap.fDelayInMs = delayTime;  // 75
+  pixelMap.fNumCyclesBlock = blockingCycles; //0
 }
 
-void LoadModeChangeAnnimation(LedMap_t &pixelMap)
+void LoadModeChangeAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
 {
   memcpy(&pixelMap.fPixelColor[0][0], &modeChangeSequenceZero, sizeof(modeChangeSequenceZero));
   memcpy(&pixelMap.fPixelColor[1][0], &modeChangeSequenceOne, sizeof(modeChangeSequenceOne));
@@ -1034,11 +1107,11 @@ void LoadModeChangeAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[10][0], &modeChangeSequenceTen, sizeof(modeChangeSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &modeChangeSequenceEleven, sizeof(modeChangeSequenceEleven));
 
-  pixelMap.fDelay = 75;
-  pixelMap.fNumCyclesBlock = 2;
+  pixelMap.fDelayInMs = delayTime;  // 75
+  pixelMap.fNumCyclesBlock = blockingCycles;  // 2
 }
 
-void LoadStartupAnnimation(LedMap_t &pixelMap)
+void LoadStartupAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
 {
   memcpy(&pixelMap.fPixelColor[0][0], &startSequenceZero, sizeof(startSequenceZero));
   memcpy(&pixelMap.fPixelColor[1][0], &startSequenceOne, sizeof(startSequenceOne));
@@ -1053,11 +1126,12 @@ void LoadStartupAnnimation(LedMap_t &pixelMap)
   memcpy(&pixelMap.fPixelColor[10][0], &startSequenceTen, sizeof(startSequenceTen));
   memcpy(&pixelMap.fPixelColor[11][0], &startSequenceEleven, sizeof(startSequenceEleven));
 
-  pixelMap.fDelay = 80;
-  pixelMap.fNumCyclesBlock = 1;
+  pixelMap.fDelayInMs = delayTime;  // 80
+  pixelMap.fNumCyclesBlock = blockingCycles; // 1
 }
 
-void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, uint32_t speed, uint32_t batteryPercentage)
+// Speed settings 0 - 3, battery in percentage from 0 - 100%
+void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles, uint32_t speed, uint32_t batteryPercentage)
 {
   uint32_t speedColor = strip.Color(120, 120, 255); 
   int ledMultiplier = round((strip.numPixels() / 2) / 3);
@@ -1135,15 +1209,10 @@ void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, uint32_t speed, uint32_t batt
   //     }
   //   }
   // }
-  pixelMap.fDelay = 200;
-  pixelMap.fNumCyclesBlock = 0;
+  pixelMap.fDelayInMs = delayTime;  //200
+  pixelMap.fNumCyclesBlock = blockingCycles;  // 
 }
 
-
-
-
-// Get video of the RF timeout issues - blinking differently
-// Test all Rf coms
 
 
 

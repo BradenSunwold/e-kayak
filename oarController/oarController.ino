@@ -772,9 +772,10 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
     count = 0;
 
-    // beginTime = millis();
+    // beginTime = xTaskGetTickCount() * portTICK_PERIOD_MS;
     myDelayMs(taskDelay);    // Execute task at 100Hz
-    // taskTime = millis() - beginTime;
+    // taskTime = (xTaskGetTickCount() * portTICK_PERIOD_MS) - beginTime;
+    // Serial.print("Task Time in ms: ");
     // Serial.println(taskTime);
   }
 
@@ -995,16 +996,16 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Create tasks
-  // xTaskCreate(ReadRfTask, "Read in", 88, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);
-  // xTaskCreate(ReadImuTask, "Read in", 184, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);
-  // xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);
-  // xTaskCreate(StateManagerTask, "Kayak State", 84, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);
-  // xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);
-  // xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);
+  xTaskCreate(ReadRfTask, "Read in", 88, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);
+  xTaskCreate(ReadImuTask, "Read in", 184, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);
+  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);
+  xTaskCreate(StateManagerTask, "Kayak State", 84, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);
+  xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);
+  xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 232, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);
 
   // Test tasks
-   xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
+  //  xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
   
 
   Serial.println("");

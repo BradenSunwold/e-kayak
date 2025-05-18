@@ -6,7 +6,9 @@
 #include <FreeRTOS_SAMD21.h>
 #include <Adafruit_BNO08x.h>
 #include <Adafruit_NeoPixel.h>
+
 #include "LedPixelMaps.hpp"
+#include "TaskMetaData.hpp"
 
 unsigned long beginTime = 0;
 unsigned long taskTime = 0;
@@ -184,7 +186,21 @@ TaskHandle_t Handle_RfOutputTask;
 TaskHandle_t Handle_LedPixelUpdaterTask;
 
 // Test tasks
+TaskHandle_t Handle_DumpTaskMetaData;
 TaskHandle_t Handle_LedPixelUpdaterTester;
+
+// Global vars for tracking task meta data
+
+TaskMetaData readRfMetaData(Handle_ReadRfTask);
+TaskMetaData readImuMetaData(Handle_ReadRfTask);
+TaskMetaData processOutputsMetaData(Handle_ProcessOutputsTask);
+TaskMetaData buttonInputMetaData(Handle_ButtonInputTask);
+TaskMetaData stateManagerMetaData(Handle_StateManagerTask);
+TaskMetaData writeRfMetaData(Handle_RfOutputTask);
+TaskMetaData ledDriverMetaData(Handle_LedPixelUpdaterTask);
+
+// test tasks 
+TaskMetaData diagTaskMetaData(Handle_DumpTaskMetaData);
 
 //**************************************************************************
 // Can use these function for RTOS delays
@@ -218,9 +234,8 @@ static void ReadRfTask( void *pvParameters )
   
   while(1)
   {
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
-    // beginTime = millis();
+    readRfMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    readRfMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
     if( radioSemaphore != NULL )
     {
@@ -250,15 +265,10 @@ static void ReadRfTask( void *pvParameters )
           // Serial.println("Could not take mutex");
       }
     }
-    
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
 
-    // beginTime = millis();
-    // count = 0;
+    readRfMetaData.GetExecutionTimer().Stop();
+
     myDelayMs(100);    // execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -272,9 +282,8 @@ static void ReadImuTask( void *pvParameters )
 
   while(1)
   {
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
-    // beginTime = millis();
+    readImuMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    readImuMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
     // Check for IMU reset
     if (bno08x.wasReset()) 
@@ -314,15 +323,10 @@ static void ReadImuTask( void *pvParameters )
       // Push data to queue
       xQueueSend(imuDataQueue, (void*)&fullImuDataSet, 1);
     }
-    
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
 
-    // beginTime = millis();
-    // count = 0;
+    readImuMetaData.GetExecutionTimer().Stop();
+
     myDelayMs(50);    // execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
   }
   
   Serial.println("Task Monitor: Deleting");
@@ -346,6 +350,10 @@ static void ButtonInputTask( void *pvParameters )
 
   while(1)
   {
+
+    buttonInputMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    buttonInputMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+
     int reading = digitalRead(BUTTON_PIN);
 
     // If the switch changed, due to noise or pressing:
@@ -395,13 +403,9 @@ static void ButtonInputTask( void *pvParameters )
       buttonReport = 0;
     }
 
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
+    buttonInputMetaData.GetExecutionTimer().Stop();
 
-    // beginTime = millis();
     myDelayMs(50);   // execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -432,6 +436,10 @@ static void StateManagerTask( void *pvParameters )
 
   while(1)
   {
+
+    stateManagerMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    stateManagerMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+
     //////////////////////// Check status from pi /////////////////////////////////
     // Check for a message in the RF input queue
     if (xQueueReceive(rfInMsgQueue, (void *)&rfReceiverMsg, 0) == pdTRUE) 
@@ -497,13 +505,10 @@ static void StateManagerTask( void *pvParameters )
       buttonPress = 0;    // Reset flag variable
     }
 
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
+    stateManagerMetaData.GetExecutionTimer().Stop();
 
-    // beginTime = millis();
     myDelayMs(100);    // execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
+
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -534,6 +539,10 @@ static void ProcessOutputsTask( void *pvParameters )
 
   while(1)
   {
+
+    processOutputsMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    processOutputsMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+
     // First check kayak status
     if(xQueueReceive(kayakStatusQueue, (void *)&kayakStatusMsg, 0) == pdTRUE)
     {
@@ -689,13 +698,10 @@ static void ProcessOutputsTask( void *pvParameters )
       }
     }
 
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
+    processOutputsMetaData.GetExecutionTimer().Stop();
 
-    // beginTime = millis();
     myDelayMs(100);    // execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
+
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -719,6 +725,10 @@ static void LedPixelUpdaterTask( void *pvParameters )
   
   while(1)
   {
+
+    ledDriverMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    ledDriverMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+
     // Serial.print("Cycle Count: ");
     // Serial.println(cycleCount);
     // Serial.print("Delay count: ");
@@ -767,16 +777,12 @@ static void LedPixelUpdaterTask( void *pvParameters )
       cycleCount++;
     }
 
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
-
     count = 0;
 
-    // beginTime = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    ledDriverMetaData.GetExecutionTimer().Stop();
+
     myDelayMs(taskDelay);    // Execute task at 100Hz
-    // taskTime = (xTaskGetTickCount() * portTICK_PERIOD_MS) - beginTime;
-    // Serial.print("Task Time in ms: ");
-    // Serial.println(taskTime);
+
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -887,6 +893,9 @@ static void RfOutputTask( void *pvParameters )
 
   while(1)
   {
+    writeRfMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    writeRfMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+
     // Read in IMU / state data
     if (xQueueReceive(imuDataQueue, (void *)&imuDataOut, 0) == pdTRUE)
     {
@@ -935,10 +944,106 @@ static void RfOutputTask( void *pvParameters )
     
     // count = 0;
 
-    // beginTime = millis();
+    writeRfMetaData.GetExecutionTimer().Stop(); 
+
     myDelayMs(50);   // execute task at 20Hz
-    // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
+
+  }
+
+  Serial.println("Task Monitor: Deleting");
+  vTaskDelete( NULL );
+}
+
+static void DumpTaskMetaDataTask( void *pvParameters )
+{
+  while(1)
+  {
+
+    diagTaskMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    diagTaskMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+
+    // Print read rf diag
+    Serial.print("ReadRF max call rate: ");
+    Serial.println(readRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInTicks());
+    Serial.print("ReadRF max execution rate: ");
+    Serial.println(readRfMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("ReadRF stack use: ");
+    Serial.println(readRfMetaData.GetStackUsageHighWaterMark());
+    Serial.println();
+
+    // Print read IMU diag
+    Serial.print("ReadImu max call rate: ");
+    Serial.println(readImuMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("ReadImu max execution rate: ");
+    Serial.println(readImuMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("ReadImu stack use: ");
+    Serial.println(readImuMetaData.GetStackUsageHighWaterMark());
+    Serial.println();
+
+
+    // Print output processor diag
+    Serial.print("outProcessor max call rate: ");
+    Serial.println(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("outProcessor max execution rate: ");
+    Serial.println(processOutputsMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("outProcessor stack use: ");
+    Serial.println(processOutputsMetaData.GetStackUsageHighWaterMark());
+    Serial.println();
+
+
+    // Print button input diag
+    Serial.print("buttonIn max call rate: ");
+    Serial.println(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("buttonIn max execution rate: ");
+    Serial.println(buttonInputMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("buttonIn stack use: ");
+    Serial.println(buttonInputMetaData.GetStackUsageHighWaterMark());
+    Serial.println();
+
+
+    // Print state manager diag
+    Serial.print("stateManager max call rate: ");
+    Serial.println(stateManagerMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("stateManager max execution rate: ");
+    Serial.println(stateManagerMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("stateManager stack use: ");
+    Serial.println(stateManagerMetaData.GetStackUsageHighWaterMark());
+    Serial.println();
+
+
+    // Print write RF diag
+    Serial.print("WriteRf max call rate: ");
+    Serial.println(writeRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("WriteRf max execution rate: ");
+    Serial.println(writeRfMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("WriteRf stack use: ");
+    Serial.println(writeRfMetaData.GetStackUsageHighWaterMark());
+    Serial.println();
+
+
+    // Print Led driver diag
+    Serial.print("LedDriver max call rate: ");
+    Serial.println(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("LedDriver max execution rate: ");
+    Serial.println(ledDriverMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("LedDriver stack use: ");
+    Serial.println(ledDriverMetaData.GetStackUsageHighWaterMark());
+    Serial.println();
+
+    // Print task diag dump diag
+    Serial.print("DiagDump max call rate: ");
+    Serial.println(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("DiagDump max execution rate: ");
+    Serial.println(diagTaskMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("DiagDump stack use: ");
+    Serial.println(diagTaskMetaData.GetStackUsageHighWaterMark());
+    Serial.println();
+
+    Serial.println();
+
+    diagTaskMetaData.GetExecutionTimer().Stop(); 
+
+    myDelayMs(2000);   // execute task at .5Hz
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -952,7 +1057,7 @@ void setup()
   digitalWrite(POWER_HOLD, HIGH);
 
   int serialResetCount = 0;
-  Serial.begin(9600);
+  Serial.begin(115200);
   while (!Serial && serialResetCount < 100) 
   {
     delay(10);     // will pause until serial console opens
@@ -995,16 +1100,17 @@ void setup()
   rfOutMsgQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
-  // Create tasks
-  xTaskCreate(ReadRfTask, "Read in", 88, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);
-  xTaskCreate(ReadImuTask, "Read in", 184, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);
-  xTaskCreate(ButtonInputTask, "Button In",  84, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);
-  xTaskCreate(StateManagerTask, "Kayak State", 84, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);
-  xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);
-  xTaskCreate(RfOutputTask, "RF Out", 108, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 232, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);
+  // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
+  xTaskCreate(ReadRfTask, "Read in", 88, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
+  xTaskCreate(ReadImuTask, "Read in", 184, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);                              // 736 bytes
+  xTaskCreate(ButtonInputTask, "Button In",  75, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);                    // 336 bytes
+  xTaskCreate(StateManagerTask, "Kayak State", 75, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);                 // 336 bytes
+  xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);        // 936 bytes
+  xTaskCreate(RfOutputTask, "RF Out", 120, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);                             // 432 bytes
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 245, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
+  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 95, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
   //  xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
   
 

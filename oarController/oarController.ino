@@ -1101,16 +1101,16 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
-  xTaskCreate(ReadRfTask, "Read in", 88, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
-  xTaskCreate(ReadImuTask, "Read in", 184, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);                              // 736 bytes
+  xTaskCreate(ReadRfTask, "Read in", 90, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
+  xTaskCreate(ReadImuTask, "Read in", 187, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);                              // 736 bytes
   xTaskCreate(ButtonInputTask, "Button In",  75, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);                    // 336 bytes
   xTaskCreate(StateManagerTask, "Kayak State", 75, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);                 // 336 bytes
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);        // 936 bytes
-  xTaskCreate(RfOutputTask, "RF Out", 120, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);                             // 432 bytes
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 245, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);        // 928 bytes
+  xTaskCreate(RfOutputTask, "RF Out", 125, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);                             // 432 bytes
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 250, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
-  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 95, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
+  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 100, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
   //  xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
   
 

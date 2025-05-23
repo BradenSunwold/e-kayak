@@ -10,14 +10,9 @@
 #include "LedPixelMaps.hpp"
 #include "TaskMetaData.hpp"
 
-unsigned long beginTime = 0;
-unsigned long taskTime = 0;
-
-uint32_t count = 0;
-
 // Global flags
-bool fault = false;
-bool startup = true;
+bool gMotorFaultFlag = false;
+bool gComsTimeoutFlag = true;   // Initialize to true on boot until RF modules connect
 
 // Define rf24 radio
 const int rf24CE = 6;
@@ -222,13 +217,16 @@ void myDelayMsUntil(TickType_t *previousWakeTime, int ms)
   vTaskDelayUntil( previousWakeTime, (ms * 1000) / portTICK_PERIOD_US );  
 }
 
-volatile UBaseType_t uxHighWaterMark;
 
 // RF input task
 static void ReadRfTask( void *pvParameters ) 
 {
   // Struct to locally store incoming RF data
   StatusMsg_t incomingData;
+
+  // Vars to track coms timeout to motor
+  volatile TickType_t lastReceivedMsgTimeInTicks = xTaskGetTickCount();
+  double comsDroppedTimeInMs = 3000.0;     // If lose signal for 3 seconds, signal re connecting annimation
 
   radioSemaphore = xSemaphoreCreateMutex();     // Create mutex
   
@@ -248,14 +246,12 @@ static void ReadRfTask( void *pvParameters )
         {
           // Store incoming data to local buffer
           radio.read(&incomingData, sizeof(incomingData));
-          if(incomingData.fStatusType == eBatteryVolt)
-          {
-            // Serial.print("Received Battery Update: ");
-            // Serial.println(incomingData.fStatusData);
-          }
 
-          // Store relevant data to queue
-          xQueueSend(rfInMsgQueue, (void *)&incomingData, 1);
+          // Update coms watchdog
+          lastReceivedMsgTimeInTicks = xTaskGetTickCount();
+
+          // Store relevant data to queue for output processing
+          xQueueSend(kayakStatusQueue, (void *)&incomingData, 1);
         }
 
           xSemaphoreGive( radioSemaphore );
@@ -264,6 +260,19 @@ static void ReadRfTask( void *pvParameters )
       {
           // Serial.println("Could not take mutex");
       }
+    }
+
+    // Check on coms watchdog
+    if(((static_cast<double>(xTaskGetTickCount()) / static_cast<double>(portTICK_PERIOD_MS)) - 
+                       (static_cast<double>(lastReceivedMsgTimeInTicks) / static_cast<double>(portTICK_PERIOD_MS))) > comsDroppedTimeInMs)
+    {
+      // Trigger coms fault - set global flag
+      gComsTimeoutFlag = true;
+    }
+    else
+    {
+      // Clear flag
+      gComsTimeoutFlag = false;
     }
 
     readRfMetaData.GetExecutionTimer().Stop();
@@ -422,51 +431,11 @@ static void StateManagerTask( void *pvParameters )
   uint8_t buttonPress = 0;
 
 
-  StatusMsg_t rfReceiverMsg;
-  rfReceiverMsg.fStatusType = eStartup;    // Initialize status type to connecting on startup
-  rfReceiverMsg.fStatusData = 0.0;
-  xQueueSend(kayakStatusQueue, (void *)&rfReceiverMsg, 1);
-
-  unsigned long lastReceivedMsg = 0;
-  unsigned long comsReconnectTime = 3000;     // If lose signal for 3 seconds, signal re connecting annimation
-  unsigned long comsErrorTime = 8000;         // 8 seconds till hard fault unless re-connects
-
-  bool startupFlag = true;
-  bool comsTimeoutFlag = false;
-
   while(1)
   {
 
     stateManagerMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
     stateManagerMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
-
-    //////////////////////// Check status from pi /////////////////////////////////
-    // Check for a message in the RF input queue
-    if (xQueueReceive(rfInMsgQueue, (void *)&rfReceiverMsg, 0) == pdTRUE) 
-    {
-      // Pass message through to output processor
-      xQueueSend(kayakStatusQueue, (void *)&rfReceiverMsg, 1);
-      lastReceivedMsg = millis();   // Record last recieved message from kayak
-      comsTimeoutFlag = false;
-    }
-    // If have not recieved message within X seconds - signal coms loss 
-    else if((millis() - lastReceivedMsg) > comsReconnectTime)
-    {
-      if(startupFlag) 
-      {
-        // Keep sending startup message (triggers connecting annimation) until faulted
-        rfReceiverMsg.fStatusType = eStartup;
-        xQueueSend(kayakStatusQueue, (void *)&rfReceiverMsg, 1);
-        startupFlag = false;
-      }
-      else if((millis() - lastReceivedMsg) > comsErrorTime && !comsTimeoutFlag)
-      {
-        rfReceiverMsg.fStatusType = eComsLoss;
-        xQueueSend(kayakStatusQueue, (void *)&rfReceiverMsg, 1);
-        comsTimeoutFlag = true;
-      }
-    }
-
 
     //////////////////////// Check state ///////////////////////////////
     if(xQueueReceive(buttonQueue, (void *)&buttonPress, 0) == pdTRUE)

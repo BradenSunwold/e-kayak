@@ -176,7 +176,6 @@ TaskHandle_t Handle_ReadRfTask;
 TaskHandle_t Handle_ReadImuTask;
 TaskHandle_t Handle_ProcessOutputsTask;
 TaskHandle_t Handle_ButtonInputTask;
-TaskHandle_t Handle_StateManagerTask;
 TaskHandle_t Handle_RfOutputTask;
 TaskHandle_t Handle_LedPixelUpdaterTask;
 
@@ -190,7 +189,6 @@ TaskMetaData readRfMetaData(Handle_ReadRfTask);
 TaskMetaData readImuMetaData(Handle_ReadRfTask);
 TaskMetaData processOutputsMetaData(Handle_ProcessOutputsTask);
 TaskMetaData buttonInputMetaData(Handle_ButtonInputTask);
-TaskMetaData stateManagerMetaData(Handle_StateManagerTask);
 TaskMetaData writeRfMetaData(Handle_RfOutputTask);
 TaskMetaData ledDriverMetaData(Handle_LedPixelUpdaterTask);
 
@@ -351,10 +349,15 @@ static void ButtonInputTask( void *pvParameters )
 
   int buttonReport = 0;
 
-  unsigned long lastDebounceTime = 0;   // the last time the output pin was toggled
-  unsigned long debounceDelay = 20;     // the debounce time; increase if the output flickers
-  unsigned long doubleClickTime = 0;
-  unsigned long doubleClickDelay = 300; // the double click time frame, lower if double click seem laggy
+  // Initialize button state message
+  StateMsg_t currButtonState;
+  currButtonState.fAutoMode = false;
+  currButtonState.fSpeed = 0;
+
+  volatile TickType_t lastDebounceTimeInMs = 0;   // the last time the output pin was toggled
+  volatile TickType_t debounceDelayInMs = 20;     // the debounce time; increase if the output flickers
+  volatile TickType_t doubleClickTimeInMs = 0;
+  volatile TickType_t doubleClickDelayInMs = 300; // the double click time frame, lower if double click seem laggy
 
 
   while(1)
@@ -369,10 +372,10 @@ static void ButtonInputTask( void *pvParameters )
     if (reading != lastButtonState) 
     {
       // reset the debouncing timer
-      lastDebounceTime = millis();
+      lastDebounceTimeInMs = xTaskGetTickCount() / portTICK_PERIOD_MS;
     }
 
-    if ((millis() - lastDebounceTime) > debounceDelay) 
+    if (((xTaskGetTickCount() / portTICK_PERIOD_MS) - lastDebounceTimeInMs) > debounceDelayInMs) 
     {
       // whatever the reading is at, it's been there for longer than the debounce
       // delay, so take it as the actual current state:
@@ -385,20 +388,24 @@ static void ButtonInputTask( void *pvParameters )
         buttonStateChangeCount++;
         if(buttonStateChangeCount <= 1)
         {
-          doubleClickTime = millis();   // Capture time of first button state change
+          doubleClickTimeInMs = xTaskGetTickCount() / portTICK_PERIOD_MS;   // Capture time of first button state change
         }
       }
     }
 
     lastButtonState = reading;
 
-    if((millis() - doubleClickTime) > doubleClickDelay)
+    if(((xTaskGetTickCount() / portTICK_PERIOD_MS) - doubleClickTimeInMs) > doubleClickDelayInMs)
     {
       if(buttonStateChangeCount > 2)
       {
-        // Found double click? 
+        // Found double click
         Serial.println("DOUBLE");
         buttonReport = 2;
+
+        // Update the current state
+        currButtonState.fAutoMode = !currButtonState.fAutoMode;
+
         xQueueSend(buttonQueue, (void*)&buttonReport, 1);
       }
       else if(buttonStateChangeCount > 1)
@@ -406,8 +413,31 @@ static void ButtonInputTask( void *pvParameters )
         // Found single click
         Serial.println("SINGLE");
         buttonReport = 1;
+
+        // Update the current state
+        if(currButtonState.fSpeed == 3)
+        {
+          currButtonState.fSpeed = 0;
+        }
+        else
+        {
+          currButtonState.fSpeed++;
+        }
+
         xQueueSend(buttonQueue, (void*)&buttonReport, 1);
       }
+
+      // If coms timeout or motor fault, latch all to defaults
+      if(gMotorFaultFlag || gComsTimeoutFlag)
+      {
+        currButtonState.fSpeed = 0;
+        currButtonState.fAutoMode = false;
+      }
+
+      // Send current state to output proceesor
+      xQueueSend(currentStateQueue, (void *)&currButtonState, 1);
+
+      // Reset local flags
       buttonStateChangeCount = 0;
       buttonReport = 0;
     }
@@ -419,69 +449,6 @@ static void ButtonInputTask( void *pvParameters )
 
   Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
-}
-
-static void StateManagerTask( void *pvParameters )
-{
-  // Initialize state
-  StateMsg_t currState;
-  currState.fAutoMode = false;
-  currState.fSpeed = 0;
-
-  uint8_t buttonPress = 0;
-
-
-  while(1)
-  {
-
-    stateManagerMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
-    stateManagerMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
-
-    //////////////////////// Check state ///////////////////////////////
-    if(xQueueReceive(buttonQueue, (void *)&buttonPress, 0) == pdTRUE)
-    {
-      if (!fault && !startup)
-      {
-        // Received button update 
-        if(buttonPress == 1)
-        {
-          // Single click - Increment speed and check for roll over
-          if(currState.fSpeed == 3)
-          {
-            currState.fSpeed = 0;
-          }
-          else
-          {
-            currState.fSpeed++;
-          }
-        }
-        else if(buttonPress == 2)
-        {
-          // Double click - Toggle mode
-          currState.fAutoMode = !currState.fAutoMode;
-        }
-      }
-      else
-      {
-        // Faulted or in startup so clamp to 0 speed
-        currState.fSpeed = 0;
-        currState.fAutoMode = false;
-        
-      }
-      // Send current state to output proceesor
-      xQueueSend(currentStateQueue, (void *)&currState, 1);
-
-      buttonPress = 0;    // Reset flag variable
-    }
-
-    stateManagerMetaData.GetExecutionTimer().Stop();
-
-    myDelayMs(100);    // execute task at 20Hz
-
-  }
-
-  Serial.println("Task Monitor: Deleting");
-  vTaskDelete( NULL );  
 }
 
 static void ProcessOutputsTask( void *pvParameters ) 
@@ -746,8 +713,6 @@ static void LedPixelUpdaterTask( void *pvParameters )
       cycleCount++;
     }
 
-    count = 0;
-
     ledDriverMetaData.GetExecutionTimer().Stop();
 
     myDelayMs(taskDelay);    // Execute task at 100Hz
@@ -970,16 +935,6 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     Serial.println();
 
 
-    // Print state manager diag
-    Serial.print("stateManager max call rate: ");
-    Serial.println(stateManagerMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
-    Serial.print("stateManager max execution rate: ");
-    Serial.println(stateManagerMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
-    Serial.print("stateManager stack use: ");
-    Serial.println(stateManagerMetaData.GetStackUsageHighWaterMark());
-    Serial.println();
-
-
     // Print write RF diag
     Serial.print("WriteRf max call rate: ");
     Serial.println(writeRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
@@ -1064,7 +1019,6 @@ void setup()
   rfInMsgQueue = xQueueCreate(msgQueueLength, sizeof(StatusMsg_t));
   imuDataQueue = xQueueCreate(msgQueueLength, sizeof(FullImuDataSet_t));
   kayakStatusQueue = xQueueCreate(msgQueueLength, sizeof(StatusMsg_t));
-  buttonQueue = xQueueCreate(msgQueueLength, sizeof(uint8_t));
   currentStateQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
   rfOutMsgQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
@@ -1073,7 +1027,6 @@ void setup()
   xTaskCreate(ReadRfTask, "Read in", 90, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
   xTaskCreate(ReadImuTask, "Read in", 187, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);                              // 736 bytes
   xTaskCreate(ButtonInputTask, "Button In",  75, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);                    // 336 bytes
-  xTaskCreate(StateManagerTask, "Kayak State", 75, NULL, tskIDLE_PRIORITY + 4, &Handle_StateManagerTask);                 // 336 bytes
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);        // 936 bytes
   xTaskCreate(RfOutputTask, "RF Out", 125, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);                             // 432 bytes
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 250, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTask);        // 928 bytes
@@ -1106,8 +1059,6 @@ void setup()
 void loop() 
 {
   // put your main code here, to run repeatedly:
-  // Serial.println(count);
-  count++;
 }
 
 // Support annimation functions

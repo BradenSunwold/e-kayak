@@ -42,21 +42,10 @@ sh2_SensorValue_t sensorValue;
 
 // #define configUSE_IDLE_HOOK 1
 
-// Initialize global queues
-size_t msgQueueLength = 10;
-static QueueHandle_t rfInMsgQueue;
-static QueueHandle_t imuDataQueue;
-static QueueHandle_t kayakStatusQueue;
-static QueueHandle_t buttonQueue;
-static QueueHandle_t currentStateQueue;
-static QueueHandle_t rfOutMsgQueue;
-static QueueHandle_t ledPixelMapQueue;
-
 // Structs / Enums
 typedef enum
 {
   eBatteryVolt,
-  eStartup,
   eLowBattery, 
   eHighCurrent, 
   eComsLoss,
@@ -171,6 +160,15 @@ void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotationalVector, ImuDataType
 
 //****************************** Tasks **********************************//
 // Task globals
+// Initialize global queues
+size_t msgQueueLength = 10;
+static QueueHandle_t rfInMsgQueue;
+static QueueHandle_t imuDataQueue;
+static QueueHandle_t kayakStatusQueue;
+static QueueHandle_t currentStateQueue;
+static QueueHandle_t rfOutMsgQueue;
+static QueueHandle_t ledPixelMapQueue;
+
 // Input tasks
 TaskHandle_t Handle_ReadRfTask;
 TaskHandle_t Handle_ReadImuTask;
@@ -183,8 +181,19 @@ TaskHandle_t Handle_LedPixelUpdaterTask;
 TaskHandle_t Handle_DumpTaskMetaData;
 TaskHandle_t Handle_LedPixelUpdaterTester;
 
-// Global vars for tracking task meta data
+// Global variables for setting task rates
+int gReadRfTaskRateInMs = 0xFFFFFFFF; 
+int gReadImuTaskRateInMs = 0xFFFFFFFF; 
+int gProcessOutTaskRateInMs = 0xFFFFFFFF; 
+int gButtonInTaskRateInMs = 0xFFFFFFFF; 
+int gWriteRfTaskRateInMs = 0xFFFFFFFF; 
+int gLedDriverTaskRateInMs = 0xFFFFFFFF; 
 
+// Test task rates
+int gLedTesterTaskRateInMs = 0xFFFFFFFF; 
+int gDiagDumpTaskRateInMs = 0xFFFFFFFF; 
+
+// Global vars for tracking task meta data
 TaskMetaData readRfMetaData(Handle_ReadRfTask);
 TaskMetaData readImuMetaData(Handle_ReadRfTask);
 TaskMetaData processOutputsMetaData(Handle_ProcessOutputsTask);
@@ -275,7 +284,7 @@ static void ReadRfTask( void *pvParameters )
 
     readRfMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(100);    // execute task at 20Hz
+    myDelayMs(gReadRfTaskRateInMs);    // execute task at 20Hz
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -333,7 +342,7 @@ static void ReadImuTask( void *pvParameters )
 
     readImuMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(50);    // execute task at 20Hz
+    myDelayMs(gReadImuTaskRateInMs);    // execute task at 20Hz
   }
   
   Serial.println("Task Monitor: Deleting");
@@ -405,8 +414,6 @@ static void ButtonInputTask( void *pvParameters )
 
         // Update the current state
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
-
-        xQueueSend(buttonQueue, (void*)&buttonReport, 1);
       }
       else if(buttonStateChangeCount > 1)
       {
@@ -423,8 +430,6 @@ static void ButtonInputTask( void *pvParameters )
         {
           currButtonState.fSpeed++;
         }
-
-        xQueueSend(buttonQueue, (void*)&buttonReport, 1);
       }
 
       // If coms timeout or motor fault, latch all to defaults
@@ -444,7 +449,7 @@ static void ButtonInputTask( void *pvParameters )
 
     buttonInputMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(50);   // execute task at 20Hz
+    myDelayMs(gButtonInTaskRateInMs);   // execute task at 20Hz
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -453,9 +458,8 @@ static void ButtonInputTask( void *pvParameters )
 
 static void ProcessOutputsTask( void *pvParameters ) 
 {
-  // bool fault = false;
-  // bool startup = true;
-  bool startupConnected = false;
+
+  bool connectingFlag = true;
 
   bool autoMode = false;
   uint32_t speed = 0;
@@ -471,7 +475,10 @@ static void ProcessOutputsTask( void *pvParameters )
 
   const TickType_t xTicksToWait = 5 / portTICK_PERIOD_MS;
 
+  // Load first animation as connecting
   Serial.println("Connecting");
+  LoadConnectingAnnimation(ledMsg, 50, 1);
+  xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
   while(1)
   {
@@ -479,76 +486,69 @@ static void ProcessOutputsTask( void *pvParameters )
     processOutputsMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
     processOutputsMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
-    // First check kayak status
-    if(xQueueReceive(kayakStatusQueue, (void *)&kayakStatusMsg, 0) == pdTRUE)
+    // First check if we have a coms fault on the oar side
+    if(gComsTimeoutFlag)
     {
-      // If received new status
-      switch(kayakStatusMsg.fStatusType)
+      connectingFlag = true;
+      // Set the connecting animation
+      LoadConnectingAnnimation(ledMsg, 50, 1);
+      xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+    }
+    else
+    {
+      // First check kayak status
+      if(xQueueReceive(kayakStatusQueue, (void *)&kayakStatusMsg, 0) == pdTRUE)
       {
-        // first check for errors
-        case eLowBattery : 
-        case eHighCurrent :
-        case eComsLoss :
-        case eUnknownFault :
-          // faults take priority
-          Serial.println("FAULT");
-          LoadErrorAnnimation(ledMsg, 75, 0);  // Set pixel map
-
-          // Add to led queue
+        // 
+        if(connectingFlag)
+        {
+          // Was previously trying to connect - load connected animation
+          LoadConnectedAnnimation(ledMsg, 75, 1);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-          fault = true;
-          break;
 
-        // Then check for fault cleared
-        case eFaultCleared :
-          LoadConnectedAnnimation(ledMsg, 75, 1);  // Set pixel map
-
-          // Add to led queue
+          // Then immediatly load startup animation after
+          LoadStartupAnnimation(ledMsg, 80, 1);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-          fault = false;
-          break;
 
-        // Then check for battery status
-        case eBatteryVolt :
-          // Package kayak battery voltage for output processor
-          kayakBatteryVolt = kayakStatusMsg.fStatusData;
-          if(startup)
-          {
-            if(!startupConnected)
-            {
-              // First load connnected annimation before startup annimation
-              LoadConnectedAnnimation(ledMsg, 75, 1);
-              Serial.println("Connected");
+          connectingFlag = false;
+        }
 
-              xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-              startupConnected = true;
-            }
-            else
-            {
-              // Now load startup annimation after connected annimation
-              LoadStartupAnnimation(ledMsg, 80, 1);
-              Serial.println("Startup");
+        // If received new status
+        switch(kayakStatusMsg.fStatusType)
+        {
+          // first check for errors
+          case eLowBattery : 
+          case eHighCurrent :
+          case eComsLoss :
+          case eUnknownFault :                                // faults take priority
+            Serial.println("FAULT");
+            gMotorFaultFlag = true;
 
-              xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-              startup = false;    // Signal output processor that startup is over
+            // Set error animation
+            LoadErrorAnnimation(ledMsg, 75, 0);  // Set pixel map
+            xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+            break;
 
-            }
+          case eFaultCleared :                                // Then check for fault cleared
+            gMotorFaultFlag = false;
 
-          }
-          break;
-        
-        case eStartup :
-          startup = true;
-          startupConnected = false;
-          LoadConnectingAnnimation(ledMsg, 50, 1);
+            // Load fault cleared animations
+            LoadConnectedAnnimation(ledMsg, 75, 1);  // Set pixel map
+            xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
-          // Add to led queue
-          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-          break;
+            LoadStartupAnnimation(ledMsg, 80, 1);
+            xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+            break;
 
-        default :
-          Serial.println("Did not recieve valid RF message");
-          break;
+          case eBatteryVolt :                                 // Then check for battery status
+            // Package kayak battery voltage for output processor
+            kayakBatteryVolt = kayakStatusMsg.fStatusData;
+            break;
+          
+          default :
+            Serial.println("Did not recieve valid RF message");
+            break;
+        }
       }
     }
 
@@ -589,7 +589,7 @@ static void ProcessOutputsTask( void *pvParameters )
       batteryPercentageReport = (uint32_t) kayakBatteryPercentage;
     }
 
-    if(!fault && !startup && batteryPercentageReport != prevBatteryPercentage)
+    if(!gMotorFaultFlag && !connectingFlag && batteryPercentageReport != prevBatteryPercentage)
     {
       // Only send new battery status if battery level has changed
       LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
@@ -607,9 +607,9 @@ static void ProcessOutputsTask( void *pvParameters )
         // Toggle autoMode
         autoMode = stateMsg.fAutoMode;
 
-        if(!fault && !startup)
+        if(!connectingFlag && !gMotorFaultFlag)
         {
-          // Only report to LED driver / RF output if we arn't currently faulted
+          // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
           LoadModeChangeAnnimation(ledMsg, 75, 2);
           Serial.print("Mode: ");
           Serial.println(stateMsg.fAutoMode);
@@ -622,9 +622,9 @@ static void ProcessOutputsTask( void *pvParameters )
       {
         speed = stateMsg.fSpeed;                            // Update local speed checker variable
 
-        if(!fault && !startup)
+        if(!connectingFlag && !gMotorFaultFlag)
         {
-          // Only report to LED driver / RF output if we arn't currently faulted
+          // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
           LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
           Serial.print("Speed: ");
           Serial.println(stateMsg.fSpeed);
@@ -636,7 +636,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
     processOutputsMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(100);    // execute task at 20Hz
+    myDelayMs(gProcessOutTaskRateInMs);    // execute task at 20Hz
 
   }
 
@@ -715,7 +715,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
     ledDriverMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(taskDelay);    // Execute task at 100Hz
+    myDelayMs(gLedDriverTaskRateInMs);    // Execute task at 100Hz
 
   }
 
@@ -785,7 +785,7 @@ static void LedPixelUpdaterTester( void *pvParameters )
     // count = 0;
 
     // beginTime = millis();
-    myDelayMs(50);   // execute task at 10 Hz
+    myDelayMs(gLedTesterTaskRateInMs);   // execute task at 10 Hz
     // taskTime = millis() - beginTime;
     // Serial.println(taskTime);
   }
@@ -880,7 +880,7 @@ static void RfOutputTask( void *pvParameters )
 
     writeRfMetaData.GetExecutionTimer().Stop(); 
 
-    myDelayMs(50);   // execute task at 20Hz
+    myDelayMs(gWriteRfTaskRateInMs);   // execute task at 20Hz
 
   }
 
@@ -967,7 +967,7 @@ static void DumpTaskMetaDataTask( void *pvParameters )
 
     diagTaskMetaData.GetExecutionTimer().Stop(); 
 
-    myDelayMs(2000);   // execute task at .5Hz
+    myDelayMs(gDiagDumpTaskRateInMs);   // execute task at .5Hz
   }
 
   Serial.println("Task Monitor: Deleting");
@@ -1022,6 +1022,16 @@ void setup()
   currentStateQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
   rfOutMsgQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
+
+  // Set all task call rates
+  gReadRfTaskRateInMs = 100; 
+  gReadImuTaskRateInMs = 50; 
+  gProcessOutTaskRateInMs = 100; 
+  gButtonInTaskRateInMs = 50; 
+  gWriteRfTaskRateInMs = 50; 
+  gLedDriverTaskRateInMs = 25; 
+  gLedTesterTaskRateInMs = 50; 
+  gDiagDumpTaskRateInMs = 2000; 
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
   xTaskCreate(ReadRfTask, "Read in", 90, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM

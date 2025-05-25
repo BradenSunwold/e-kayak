@@ -677,14 +677,14 @@ static void LedPixelUpdaterTask( void *pvParameters )
         // Read from pixel map queue and update annimation struct
         nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);    // Reset next annimation timeout
         cycleCount = 0;
-        Serial.println("New pixel map command");
+        // Serial.println("New pixel map command");
       }
     }
 
     // Update Cycle counters
     if(cycleCount >= strip.numPixels())
     {
-      Serial.println(cycleCount);
+      // Serial.println(cycleCount);
       cycleCount = 0;
 
       // Check if annimation is done blocking
@@ -841,8 +841,8 @@ static void RfOutputTask( void *pvParameters )
     {
       // Package state into RF output struct
       memcpy(&outputMsgFirstHalf.fOutputState, &stateDataOut, sizeof(stateDataOut));
-      Serial.println(outputMsgFirstHalf.fOutputState.fAutoMode);
-      Serial.println(outputMsgFirstHalf.fOutputState.fSpeed);
+      // Serial.println(outputMsgFirstHalf.fOutputState.fAutoMode);
+      // Serial.println(outputMsgFirstHalf.fOutputState.fSpeed);
     }
 
     if( radioSemaphore != NULL )
@@ -851,7 +851,7 @@ static void RfOutputTask( void *pvParameters )
       {
         // radio.setPayloadSize(sizeof(outputMsg)); 
         radio.setPayloadSize(sizeof(outputMsgFirstHalf)); 
-        radio.stopListening();  // put radio in TX mode
+        radio.stopListening();    // put radio in TX mode
 
         // Send RF data out
         unsigned long start_timer = millis();                // start the timer
@@ -872,12 +872,7 @@ static void RfOutputTask( void *pvParameters )
     {
       // Serial.println("Could not take mutex");
     }
-
-    // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
     
-    // count = 0;
-
     writeRfMetaData.GetExecutionTimer().Stop(); 
 
     myDelayMs(gWriteRfTaskRateInMs);   // execute task at 20Hz
@@ -994,6 +989,7 @@ void setup()
   radio.openReadingPipe(1, address[1]);
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_MIN);
+  radio.setRetries(5, 3);       // Need to test with Rx and Tx running on motor and oar
 
   // SETUP Button
   pinMode(BUTTON_PIN, INPUT);
@@ -1024,18 +1020,18 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Set all task call rates
-  gReadRfTaskRateInMs = 100; 
+  gReadRfTaskRateInMs = 200; 
   gReadImuTaskRateInMs = 50; 
-  gProcessOutTaskRateInMs = 100; 
+  gProcessOutTaskRateInMs = 200; 
   gButtonInTaskRateInMs = 50; 
   gWriteRfTaskRateInMs = 50; 
   gLedDriverTaskRateInMs = 25; 
   gLedTesterTaskRateInMs = 50; 
-  gDiagDumpTaskRateInMs = 2000; 
+  gDiagDumpTaskRateInMs = 3000; 
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
-  xTaskCreate(ReadRfTask, "Read in", 90, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
-  xTaskCreate(ReadImuTask, "Read in", 187, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);                              // 736 bytes
+  xTaskCreate(ReadRfTask, "Read in", 100, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
+  xTaskCreate(ReadImuTask, "Read in", 195, NULL, tskIDLE_PRIORITY + 6, &Handle_ReadImuTask);                              // 736 bytes
   xTaskCreate(ButtonInputTask, "Button In",  75, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);                    // 336 bytes
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 3, &Handle_ProcessOutputsTask);        // 936 bytes
   xTaskCreate(RfOutputTask, "RF Out", 125, NULL, tskIDLE_PRIORITY + 6, &Handle_RfOutputTask);                             // 432 bytes

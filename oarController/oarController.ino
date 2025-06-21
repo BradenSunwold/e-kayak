@@ -356,17 +356,15 @@ static void ButtonInputTask( void *pvParameters )
   int lastButtonState = 0;
   uint32_t buttonStateChangeCount = 0;
 
-  int buttonReport = 0;
-
   // Initialize button state message
   StateMsg_t currButtonState;
   currButtonState.fAutoMode = false;
   currButtonState.fSpeed = 0;
 
-  volatile TickType_t lastDebounceTimeInMs = 0;   // the last time the output pin was toggled
-  volatile TickType_t debounceDelayInMs = 20;     // the debounce time; increase if the output flickers
+  volatile TickType_t lastDebounceTimeInMs = 0;     // the last time the output pin was toggled
+  volatile TickType_t debounceDelayInMs = 0;        // debounce time; increase if the output flickers - set to 0 since task running at 50ms period
   volatile TickType_t doubleClickTimeInMs = 0;
-  volatile TickType_t doubleClickDelayInMs = 300; // the double click time frame, lower if double click seem laggy
+  volatile TickType_t doubleClickDelayInMs = 300;   // the double click time frame, lower if double click seem laggy
 
 
   while(1)
@@ -406,20 +404,20 @@ static void ButtonInputTask( void *pvParameters )
 
     if(((xTaskGetTickCount() / portTICK_PERIOD_MS) - doubleClickTimeInMs) > doubleClickDelayInMs)
     {
+      // Double button press = 4 state changes (on / off, on / off)
       if(buttonStateChangeCount > 2)
       {
         // Found double click
         Serial.println("DOUBLE");
-        buttonReport = 2;
 
         // Update the current state
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
       }
+      // Single button press = 2 state changes (on / off)
       else if(buttonStateChangeCount > 1)
       {
         // Found single click
         Serial.println("SINGLE");
-        buttonReport = 1;
 
         // Update the current state
         if(currButtonState.fSpeed == 3)
@@ -444,7 +442,6 @@ static void ButtonInputTask( void *pvParameters )
 
       // Reset local flags
       buttonStateChangeCount = 0;
-      buttonReport = 0;
     }
 
     buttonInputMetaData.GetExecutionTimer().Stop();
@@ -1092,16 +1089,16 @@ void setup()
   gReadRfTaskRateInMs = 200; 
   gReadImuTaskRateInMs = 50; 
   gProcessOutTaskRateInMs = 200; 
-  gButtonInTaskRateInMs = 50; 
+  gButtonInTaskRateInMs = 20; 
   gWriteRfTaskRateInMs = 50; 
   gLedDriverTaskRateInMs = 50; 
   gLedTesterTaskRateInMs = 50; 
   gDiagDumpTaskRateInMs = 5000; 
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
-  xTaskCreate(ReadRfTask, "Read in", 100, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
-  xTaskCreate(ReadImuTask, "Read in", 195, NULL, tskIDLE_PRIORITY + 7, &Handle_ReadImuTask);                              // 736 bytes
-  xTaskCreate(ButtonInputTask, "Button In",  75, NULL, tskIDLE_PRIORITY + 7, &Handle_ButtonInputTask);                    // 336 bytes
+  xTaskCreate(ReadRfTask, "Read RF", 100, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
+  xTaskCreate(ReadImuTask, "Read IMU", 195, NULL, tskIDLE_PRIORITY + 7, &Handle_ReadImuTask);                              // 736 bytes
+  xTaskCreate(ButtonInputTask, "Button In",  75, NULL, tskIDLE_PRIORITY + 8, &Handle_ButtonInputTask);                    // 336 bytes
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 4, &Handle_ProcessOutputsTask);        // 936 bytes
   xTaskCreate(RfOutputTask, "RF Out", 125, NULL, tskIDLE_PRIORITY + 7, &Handle_RfOutputTask);                             // 432 bytes
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 250, NULL, tskIDLE_PRIORITY + 6, &Handle_LedPixelUpdaterTask);        // 928 bytes

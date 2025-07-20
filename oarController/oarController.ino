@@ -238,6 +238,7 @@ static void ReadRfTask( void *pvParameters )
   // Vars to track coms timeout to motor
   volatile TickType_t lastReceivedMsgTimeInTicks = xTaskGetTickCount();
   double comsDroppedTimeInMs = 3000.0;     // If lose signal for 3 seconds, signal re connecting annimation
+  bool firstMessageReceived = false;
 
   radioSemaphore = xSemaphoreCreateMutex();     // Create mutex
   
@@ -260,6 +261,7 @@ static void ReadRfTask( void *pvParameters )
 
           // Update coms watchdog
           lastReceivedMsgTimeInTicks = xTaskGetTickCount();
+          firstMessageReceived = true;
 
           // Store relevant data to queue for output processing
           xQueueSend(kayakStatusQueue, (void *)&incomingData, 1);
@@ -275,7 +277,7 @@ static void ReadRfTask( void *pvParameters )
 
     // Check on coms watchdog
     if(((static_cast<double>(xTaskGetTickCount()) / static_cast<double>(portTICK_PERIOD_MS)) - 
-                       (static_cast<double>(lastReceivedMsgTimeInTicks) / static_cast<double>(portTICK_PERIOD_MS))) > comsDroppedTimeInMs)
+                       (static_cast<double>(lastReceivedMsgTimeInTicks) / static_cast<double>(portTICK_PERIOD_MS))) > comsDroppedTimeInMs || !firstMessageReceived)
     {
       // Trigger coms fault - set global flag
       gComsTimeoutFlag = true;
@@ -495,17 +497,6 @@ static void ProcessOutputsTask( void *pvParameters )
     strip.Color(120, 120, 255)    // top-most (11)
     };
 
-  // Load first animation as connecting
-  Serial.println("Connecting");
-  ledMsg = 
-  {
-    .fFrameGenerator = CircularFrameGeneratorGreen,
-    .fDelayInMs = 50,
-    .fNumCyclesBlock = 1,
-    .fNumFrames = LED_COUNT
-  };
-  xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-
   while(1)
   {
 
@@ -519,7 +510,7 @@ static void ProcessOutputsTask( void *pvParameters )
       // Set the connecting animation
       ledMsg = 
       {
-        .fFrameGenerator = CircularFrameGeneratorGreen,
+        .fFrameGenerator = CircularFrameGeneratorGreen,      // When commenting this out, after two cycles I see no animations
         .fDelayInMs = 50,
         .fNumCyclesBlock = 1,
         .fNumFrames = LED_COUNT
@@ -655,7 +646,7 @@ static void ProcessOutputsTask( void *pvParameters )
       }
     }
 
-    if(!gMotorFaultFlag && !connectingFlag && batteryPercentageReport != prevBatteryPercentage)
+    if(!gMotorFaultFlag && !connectingFlag && !gComsTimeoutFlag && batteryPercentageReport != prevBatteryPercentage)
     {
       // Only send new battery status if battery level has changed
       ledMsg = 
@@ -666,6 +657,9 @@ static void ProcessOutputsTask( void *pvParameters )
         .fNumFrames = LED_COUNT
       };
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+      Serial.println("Sending new battery status");
+      Serial.println(speed);
+      Serial.println(batteryPercentageReport);
       prevBatteryPercentage = batteryPercentageReport;
     }
 
@@ -677,7 +671,7 @@ static void ProcessOutputsTask( void *pvParameters )
         // Toggle autoMode
         autoMode = stateMsg.fAutoMode;
 
-        if(!connectingFlag && !gMotorFaultFlag)
+        if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
           // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
           ledMsg = 
@@ -698,7 +692,7 @@ static void ProcessOutputsTask( void *pvParameters )
       {
         speed = stateMsg.fSpeed;                            // Update local speed checker variable
 
-        if(!connectingFlag && !gMotorFaultFlag)
+        if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
           // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
           ledMsg = 
@@ -729,13 +723,14 @@ static void ProcessOutputsTask( void *pvParameters )
 static void LedPixelUpdaterTask( void *pvParameters )
 {
   // Default annimation to connecting
-  LedMap_t pixelMap = 
-          {
-            .fFrameGenerator = CircularFrameGeneratorGreen,
-            .fDelayInMs = 50,
-            .fNumCyclesBlock = 1,
-            .fNumFrames = LED_COUNT
-          };
+  LedMap_t pixelMap;
+  //  = 
+  //         {
+  //           .fFrameGenerator = CircularFrameGeneratorGreen,
+  //           .fDelayInMs = 50,
+  //           .fNumCyclesBlock = 1,
+  //           .fNumFrames = LED_COUNT
+  //         };
 
   // Mechanism to track when next annimation update should be  
   volatile TickType_t currPixelTimeout = xTaskGetTickCount();
@@ -1209,7 +1204,7 @@ void setup()
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 6, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
-  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 100, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
+  // xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 100, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
   //  xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
   
 

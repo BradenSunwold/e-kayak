@@ -111,8 +111,9 @@ typedef struct
   ImuAddReportsVector_t fOutputImuAddReports;
 } RfOutputMsgSecondHalf_t;
 
-// Forware decs
-std::function<void(int, uint32_t*)> MakeGaugeFrameGenerator(uint8_t speed, uint32_t batteryPercentage);
+// Forward decs
+std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speed, uint32_t batteryPercentage);
+std::function<void(int, uint32_t*)> StartupFrameGenerator(const uint32_t* leftHalfColors, const uint32_t* rightHalfColors);
 
 
 
@@ -475,6 +476,25 @@ static void ProcessOutputsTask( void *pvParameters )
 
   uint32_t downSampleBatteryReadCount = 0;
 
+  // Define colors for Startup animation
+  uint32_t rightColorsStartupAni[6]  = {
+    batteryColorIndex[0],   // bottom-most (5)
+    batteryColorIndex[1],
+    batteryColorIndex[2],
+    batteryColorIndex[3],
+    batteryColorIndex[4],
+    batteryColorIndex[5]    // top-most (0)
+    };
+
+  uint32_t leftColorsStartupAni[6] = {
+    strip.Color(120, 120, 255),   // bottom-most (6)
+    strip.Color(120, 120, 255), 
+    strip.Color(120, 120, 255),  
+    strip.Color(120, 120, 255), 
+    strip.Color(120, 120, 255),  
+    strip.Color(120, 120, 255)    // top-most (11)
+    };
+
   // Load first animation as connecting
   Serial.println("Connecting");
   ledMsg = 
@@ -525,14 +545,13 @@ static void ProcessOutputsTask( void *pvParameters )
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
           // Then immediatly load startup animation after
-          // ledMsg = 
-          // {
-          //   .fFrameGenerator = PulseFrameGeneratorGreen,
-          //   .fDelayInMs = 75,
-          //   .fNumCyclesBlock = 1,
-          //   .fNumFrames = LED_COUNT
-          // };
-          // LoadStartupAnnimation(ledMsg, 80, 1);
+          ledMsg = 
+          {
+            .fFrameGenerator = StartupFrameGenerator(leftColorsStartupAni, rightColorsStartupAni),
+            .fDelayInMs = 80,
+            .fNumCyclesBlock = 1,
+            .fNumFrames = LED_COUNT
+          };
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
           connectingFlag = false;
@@ -573,14 +592,13 @@ static void ProcessOutputsTask( void *pvParameters )
             };
             xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
-            //  ledMsg = 
-            // {
-            //   .fFrameGenerator = PulseFrameGeneratorGreen,
-            //   .fDelayInMs = 75,
-            //   .fNumCyclesBlock = 1,
-            //   .fNumFrames = LED_COUNT
-            // };
-            // LoadStartupAnnimation(ledMsg, 80, 1);
+            ledMsg = 
+            {
+              .fFrameGenerator = StartupFrameGenerator(leftColorsStartupAni, rightColorsStartupAni),
+              .fDelayInMs = 80,
+              .fNumCyclesBlock = 1,
+              .fNumFrames = LED_COUNT
+            };
             xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
             break;
 
@@ -640,16 +658,13 @@ static void ProcessOutputsTask( void *pvParameters )
     if(!gMotorFaultFlag && !connectingFlag && batteryPercentageReport != prevBatteryPercentage)
     {
       // Only send new battery status if battery level has changed
-      // ledMsg = 
-      // {
-      //   .fFrameGenerator = PulseFrameGeneratorGreen,
-      //   .fDelayInMs = 75,
-      //   .fNumCyclesBlock = 1,
-      //   .fNumFrames = LED_COUNT
-      // };
-      // LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
-      // Serial.println("Sending battery Update to LED");
-
+      ledMsg = 
+      {
+        .fFrameGenerator = GaugeFrameGenerator(speed, batteryPercentageReport),
+        .fDelayInMs = 200,
+        .fNumCyclesBlock = 0,
+        .fNumFrames = LED_COUNT
+      };
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
       prevBatteryPercentage = batteryPercentageReport;
     }
@@ -686,14 +701,13 @@ static void ProcessOutputsTask( void *pvParameters )
         if(!connectingFlag && !gMotorFaultFlag)
         {
           // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
-          // ledMsg = 
-          // {
-          //   .fFrameGenerator = PulseFrameGeneratorGreen,
-          //   .fDelayInMs = 75,
-          //   .fNumCyclesBlock = 1,
-          //   .fNumFrames = LED_COUNT
-          // };
-          // LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
+          ledMsg = 
+          {
+            .fFrameGenerator = GaugeFrameGenerator(speed, batteryPercentageReport),
+            .fDelayInMs = 200,
+            .fNumCyclesBlock = 0,
+            .fNumFrames = LED_COUNT
+          };
           Serial.print("Speed: ");
           Serial.println(stateMsg.fSpeed);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -714,7 +728,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
 static void LedPixelUpdaterTask( void *pvParameters )
 {
-  // Default annimation to solid white
+  // Default annimation to connecting
   LedMap_t pixelMap = 
           {
             .fFrameGenerator = CircularFrameGeneratorGreen,
@@ -1335,7 +1349,7 @@ void CircularFrameGeneratorGreen(int frameIndex, uint32_t* outputColorBuffer)
   }
 }
 
-std::function<void(int, uint32_t*)> MakeGaugeFrameGenerator(uint8_t speed, uint32_t batteryPercentage)
+std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speed, uint32_t batteryPercentage)
 {
   return [=](int frameIndex, uint32_t* ledOutputColorBuffer)
   {
@@ -1361,42 +1375,34 @@ std::function<void(int, uint32_t*)> MakeGaugeFrameGenerator(uint8_t speed, uint3
   };
 }
 
-// std::function<void(int, uint32_t*)> MakeRampUpHalfRingGenerator(const std::vector<uint32_t>& colorPalette)
-// {
-//   constexpr int NUM_PIXELS = 12;
+std::function<void(int, uint32_t*)> StartupFrameGenerator(
+    const uint32_t* leftHalfColors,
+    const uint32_t* rightHalfColors)
+{
+  return [=](int frameIndex, uint32_t* ledBuffer)
+  {
+    const int halfCount = 6;
+    int pixelsToLight = frameIndex % (halfCount + 1); // 0 to 6
 
-//   // Define the ramp-up order for each side of the ring
-//   const uint8_t leftSide[]  = {0, 1, 2, 3, 4, 5, 6};
-//   const uint8_t rightSide[] = {11, 10, 9, 8, 7};
+    // Clear all LEDs
+    for (int i = 0; i < LED_COUNT; ++i)
+      ledBuffer[i] = 0;
 
-//   // Total steps = max length of the longest side
-//   const int maxSteps = std::max(sizeof(leftSide), sizeof(rightSide));
+    // Light up left half from 5 → 0
+    for (int i = 0; i < pixelsToLight; ++i)
+    {
+      int ledIndex = 5 - i;
+      ledBuffer[ledIndex] = leftHalfColors[i];
+    }
 
-//   return [=](int frameIndex, uint32_t* ledOutputColorBuffer)
-//   {
-//     // Clear buffer first
-//     memset(ledOutputColorBuffer, 0, NUM_PIXELS * sizeof(uint32_t));
-
-//     // Get color for this frame from palette (loops around if needed)
-//     uint32_t color = colorPalette[frameIndex % colorPalette.size()];
-
-//     // Fade scale per pixel step (0.0 to 1.0)
-//     for (int i = 0; i <= frameIndex && i < maxSteps; ++i)
-//     {
-//       float brightness = static_cast<float>(i + 1) / maxSteps;
-
-//       uint8_t r = (uint8_t)(((color >> 16) & 0xFF) * brightness);
-//       uint8_t g = (uint8_t)(((color >> 8) & 0xFF) * brightness);
-//       uint8_t b = (uint8_t)((color & 0xFF) * brightness);
-
-//       if (i < sizeof(leftSide))
-//         ledOutputColorBuffer[leftSide[i]] = strip.Color(r, g, b);
-
-//       if (i < sizeof(rightSide))
-//         ledOutputColorBuffer[rightSide[i]] = strip.Color(r, g, b);
-//     }
-//   };
-// }
+    // Light up right half from 6 → 11
+    for (int i = 0; i < pixelsToLight; ++i)
+    {
+      int ledIndex = 6 + i;
+      ledBuffer[ledIndex] = rightHalfColors[i];
+    }
+  };
+}
 
 
 

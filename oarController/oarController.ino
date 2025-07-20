@@ -111,6 +111,9 @@ typedef struct
   ImuAddReportsVector_t fOutputImuAddReports;
 } RfOutputMsgSecondHalf_t;
 
+// Forware decs
+std::function<void(int, uint32_t*)> MakeGaugeFrameGenerator(uint8_t speed, uint32_t batteryPercentage);
+
 
 
 //######################** Support functions ****************************//
@@ -474,7 +477,13 @@ static void ProcessOutputsTask( void *pvParameters )
 
   // Load first animation as connecting
   Serial.println("Connecting");
-  LoadConnectingAnnimation(ledMsg, 50, 1);
+  ledMsg = 
+  {
+    .fFrameGenerator = CircularFrameGeneratorGreen,
+    .fDelayInMs = 50,
+    .fNumCyclesBlock = 1,
+    .fNumFrames = LED_COUNT
+  };
   xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
   while(1)
@@ -488,7 +497,13 @@ static void ProcessOutputsTask( void *pvParameters )
     {
       connectingFlag = true;
       // Set the connecting animation
-      LoadConnectingAnnimation(ledMsg, 50, 1);
+      ledMsg = 
+      {
+        .fFrameGenerator = CircularFrameGeneratorGreen,
+        .fDelayInMs = 50,
+        .fNumCyclesBlock = 1,
+        .fNumFrames = LED_COUNT
+      };
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
     }
     else
@@ -500,11 +515,24 @@ static void ProcessOutputsTask( void *pvParameters )
         if(connectingFlag)
         {
           // Was previously trying to connect - load connected animation
-          LoadConnectedAnnimation(ledMsg, 75, 1);
+          ledMsg = 
+          {
+            .fFrameGenerator = PulseFrameGeneratorGreen,
+            .fDelayInMs = 75,
+            .fNumCyclesBlock = 1,
+            .fNumFrames = LED_COUNT
+          };
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
           // Then immediatly load startup animation after
-          LoadStartupAnnimation(ledMsg, 80, 1);
+          // ledMsg = 
+          // {
+          //   .fFrameGenerator = PulseFrameGeneratorGreen,
+          //   .fDelayInMs = 75,
+          //   .fNumCyclesBlock = 1,
+          //   .fNumFrames = LED_COUNT
+          // };
+          // LoadStartupAnnimation(ledMsg, 80, 1);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
           connectingFlag = false;
@@ -522,7 +550,13 @@ static void ProcessOutputsTask( void *pvParameters )
             gMotorFaultFlag = true;
 
             // Set error animation
-            LoadErrorAnnimation(ledMsg, 75, 0);  // Set pixel map
+            ledMsg = 
+            {
+              .fFrameGenerator = PulseFrameGeneratorRed,
+              .fDelayInMs = 75,
+              .fNumCyclesBlock = 0,
+              .fNumFrames = LED_COUNT
+            };
             xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
             break;
 
@@ -530,10 +564,23 @@ static void ProcessOutputsTask( void *pvParameters )
             gMotorFaultFlag = false;
 
             // Load fault cleared animations
-            LoadConnectedAnnimation(ledMsg, 75, 1);  // Set pixel map
+            ledMsg = 
+            {
+              .fFrameGenerator = PulseFrameGeneratorGreen,
+              .fDelayInMs = 75,
+              .fNumCyclesBlock = 1,
+              .fNumFrames = LED_COUNT
+            };
             xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
-            LoadStartupAnnimation(ledMsg, 80, 1);
+            //  ledMsg = 
+            // {
+            //   .fFrameGenerator = PulseFrameGeneratorGreen,
+            //   .fDelayInMs = 75,
+            //   .fNumCyclesBlock = 1,
+            //   .fNumFrames = LED_COUNT
+            // };
+            // LoadStartupAnnimation(ledMsg, 80, 1);
             xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
             break;
 
@@ -593,7 +640,14 @@ static void ProcessOutputsTask( void *pvParameters )
     if(!gMotorFaultFlag && !connectingFlag && batteryPercentageReport != prevBatteryPercentage)
     {
       // Only send new battery status if battery level has changed
-      LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
+      // ledMsg = 
+      // {
+      //   .fFrameGenerator = PulseFrameGeneratorGreen,
+      //   .fDelayInMs = 75,
+      //   .fNumCyclesBlock = 1,
+      //   .fNumFrames = LED_COUNT
+      // };
+      // LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
       // Serial.println("Sending battery Update to LED");
 
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -611,7 +665,13 @@ static void ProcessOutputsTask( void *pvParameters )
         if(!connectingFlag && !gMotorFaultFlag)
         {
           // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
-          LoadModeChangeAnnimation(ledMsg, 75, 2);
+          ledMsg = 
+          {
+            .fFrameGenerator = PulseFrameGeneratorBlue,
+            .fDelayInMs = 75,
+            .fNumCyclesBlock = 2,
+            .fNumFrames = LED_COUNT
+          };
           Serial.print("Mode: ");
           Serial.println(stateMsg.fAutoMode);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -626,7 +686,14 @@ static void ProcessOutputsTask( void *pvParameters )
         if(!connectingFlag && !gMotorFaultFlag)
         {
           // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
-          LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
+          // ledMsg = 
+          // {
+          //   .fFrameGenerator = PulseFrameGeneratorGreen,
+          //   .fDelayInMs = 75,
+          //   .fNumCyclesBlock = 1,
+          //   .fNumFrames = LED_COUNT
+          // };
+          // LoadGaugeUpdateAnnimation(ledMsg, 200, 0, speed, batteryPercentageReport);
           Serial.print("Speed: ");
           Serial.println(stateMsg.fSpeed);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -647,17 +714,20 @@ static void ProcessOutputsTask( void *pvParameters )
 
 static void LedPixelUpdaterTask( void *pvParameters )
 {
-  // Pixel map
-  LedMap_t pixelMap;
-
-  // Set default pixel map to connecting annimation sequence
-  LoadConnectingAnnimation(pixelMap, 50, 1);
+  // Default annimation to solid white
+  LedMap_t pixelMap = 
+          {
+            .fFrameGenerator = CircularFrameGeneratorGreen,
+            .fDelayInMs = 50,
+            .fNumCyclesBlock = 1,
+            .fNumFrames = LED_COUNT
+          };
 
   // Mechanism to track when next annimation update should be  
   volatile TickType_t currPixelTimeout = xTaskGetTickCount();
   volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);  
 
-  volatile int cycleCount = 0;    // Counter to track 12 cycle counter
+  volatile int cycleCount = 0;    // Counter to track frame cycles
   volatile int taskDelay = 25;
   
   while(1)
@@ -678,12 +748,11 @@ static void LedPixelUpdaterTask( void *pvParameters )
         // Read from pixel map queue and update annimation struct
         nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);    // Reset next annimation timeout
         cycleCount = 0;
-        // Serial.println("New pixel map command");
       }
     }
 
     // Update Cycle counters
-    if(cycleCount >= strip.numPixels())
+    if(cycleCount >= pixelMap.fNumFrames)
     {
       // Serial.println(cycleCount);
       cycleCount = 0;
@@ -700,15 +769,20 @@ static void LedPixelUpdaterTask( void *pvParameters )
     }
 
     // Update strip if time 
+    uint32_t frameBuffer[LED_COUNT];
     if(currPixelTimeout = xTaskGetTickCount() >= nextPixelTimeout)
     {
-      // Serial.println("tock");
-      // Set each pixel for the current frame
-      for(int i = 0; i < strip.numPixels(); i++)
+      // If frame generator loaded, generate next color buffer frame
+      if (pixelMap.fFrameGenerator)
       {
-        strip.setPixelColor(i, pixelMap.fPixelColor[cycleCount][i]);
-        strip.show();
+        pixelMap.fFrameGenerator(cycleCount, frameBuffer);
       }
+
+      for (int i = 0; i < strip.numPixels(); i++) 
+      {
+        strip.setPixelColor(i, frameBuffer[i]);
+      }
+      strip.show();
 
       nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);  // Reset next annimation timeout
       cycleCount++;
@@ -734,12 +808,6 @@ static void LedPixelUpdaterTester( void *pvParameters )
   volatile TickType_t nextSetLoadTimeout = xTaskGetTickCount() + (loadNextSetDelayInMs / portTICK_PERIOD_MS); 
 
   // Load pixel maps
-  LoadConnectingAnnimation(pixelMapList[0], 50, 1);
-  LoadConnectedAnnimation(pixelMapList[1], 75, 1);
-  LoadErrorAnnimation(pixelMapList[2], 75, 0);
-  LoadModeChangeAnnimation(pixelMapList[3], 75, 2);
-  LoadStartupAnnimation(pixelMapList[4], 80, 1);
-  LoadGaugeUpdateAnnimation(pixelMapList[5], 200, 0, 1, 50);
 
   // index to track map transitions
   uint32_t index = 0;
@@ -1119,12 +1187,12 @@ void setup()
   gDiagDumpTaskRateInMs = 5000; 
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
-  xTaskCreate(ReadRfTask, "Read RF", 100, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
-  xTaskCreate(ReadImuTask, "Read IMU", 195, NULL, tskIDLE_PRIORITY + 7, &Handle_ReadImuTask);                              // 736 bytes
-  xTaskCreate(ButtonInputTask, "Button In",  75, NULL, tskIDLE_PRIORITY + 8, &Handle_ButtonInputTask);                    // 336 bytes
-  xTaskCreate(ProcessOutputsTask, "Process Outputs", 234, NULL, tskIDLE_PRIORITY + 4, &Handle_ProcessOutputsTask);        // 936 bytes
-  xTaskCreate(RfOutputTask, "RF Out", 125, NULL, tskIDLE_PRIORITY + 7, &Handle_RfOutputTask);                             // 432 bytes
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 250, NULL, tskIDLE_PRIORITY + 6, &Handle_LedPixelUpdaterTask);        // 928 bytes
+  xTaskCreate(ReadRfTask, "Read RF", 120, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
+  xTaskCreate(ReadImuTask, "Read IMU", 210, NULL, tskIDLE_PRIORITY + 7, &Handle_ReadImuTask);                              // 736 bytes
+  xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 8, &Handle_ButtonInputTask);                    // 336 bytes
+  xTaskCreate(ProcessOutputsTask, "Process Outputs", 130, NULL, tskIDLE_PRIORITY + 4, &Handle_ProcessOutputsTask);        // 936 bytes
+  xTaskCreate(RfOutputTask, "RF Out", 140, NULL, tskIDLE_PRIORITY + 7, &Handle_RfOutputTask);                             // 432 bytes
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 6, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
   xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 100, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
@@ -1156,186 +1224,179 @@ void loop()
   // put your main code here, to run repeatedly:
 }
 
-// Support annimation functions
-void LoadConnectingAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
+// Support Annimation Functions
+void PulseFrameGeneratorRed(int index, uint32_t* outputColorBuffer)
 {
-  memcpy(&pixelMap.fPixelColor[0][0], &connectSequenceZero, sizeof(connectSequenceZero));
-  memcpy(&pixelMap.fPixelColor[1][0], &connectSequenceOne, sizeof(connectSequenceOne));
-  memcpy(&pixelMap.fPixelColor[2][0], &connectSequenceTwo, sizeof(connectSequenceTwo));
-  memcpy(&pixelMap.fPixelColor[3][0], &connectSequenceThree, sizeof(connectSequenceThree));
-  memcpy(&pixelMap.fPixelColor[4][0], &connectSequenceFour, sizeof(connectSequenceFour));
-  memcpy(&pixelMap.fPixelColor[5][0], &connectSequenceFive, sizeof(connectSequenceFive));
-  memcpy(&pixelMap.fPixelColor[6][0], &connectSequenceSix, sizeof(connectSequenceSix));
-  memcpy(&pixelMap.fPixelColor[7][0], &connectSequenceSeven, sizeof(connectSequenceSeven));
-  memcpy(&pixelMap.fPixelColor[8][0], &connectSequenceEight, sizeof(connectSequenceEight));
-  memcpy(&pixelMap.fPixelColor[9][0], &connectSequenceNine, sizeof(connectSequenceNine));
-  memcpy(&pixelMap.fPixelColor[10][0], &connectSequenceTen, sizeof(connectSequenceTen));
-  memcpy(&pixelMap.fPixelColor[11][0], &connectSequenceEleven, sizeof(connectSequenceEleven));
+  // Set default color to red
+  uint8_t red = 255;
+  uint8_t green = 0;
+  uint8_t blue = 0; 
 
-  pixelMap.fDelayInMs = delayTime; // 50
-  pixelMap.fNumCyclesBlock = blockingCycles;  // 1
-}
+  // Dim down to off first half of annimation
+  int half = LED_COUNT / 2;
+  float scale = (index < half)
+                  ? 1.0f - (static_cast<float>(index) / half)
+                  : static_cast<float>(index - half) / half;
 
-void LoadConnectedAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
-{
-  memcpy(&pixelMap.fPixelColor[0][0], &connectedSequenceZero, sizeof(connectedSequenceZero));
-  memcpy(&pixelMap.fPixelColor[1][0], &connectedSequenceOne, sizeof(connectedSequenceOne));
-  memcpy(&pixelMap.fPixelColor[2][0], &connectedSequenceTwo, sizeof(connectedSequenceTwo));
-  memcpy(&pixelMap.fPixelColor[3][0], &connectedSequenceThree, sizeof(connectedSequenceThree));
-  memcpy(&pixelMap.fPixelColor[4][0], &connectedSequenceFour, sizeof(connectedSequenceFour));
-  memcpy(&pixelMap.fPixelColor[5][0], &connectedSequenceFive, sizeof(connectedSequenceFive));
-  memcpy(&pixelMap.fPixelColor[6][0], &connectedSequenceSix, sizeof(connectedSequenceSix));
-  memcpy(&pixelMap.fPixelColor[7][0], &connectedSequenceSeven, sizeof(connectedSequenceSeven));
-  memcpy(&pixelMap.fPixelColor[8][0], &connectedSequenceEight, sizeof(connectedSequenceEight));
-  memcpy(&pixelMap.fPixelColor[9][0], &connectedSequenceNine, sizeof(connectedSequenceNine));
-  memcpy(&pixelMap.fPixelColor[10][0], &connectedSequenceTen, sizeof(connectedSequenceTen));
-  memcpy(&pixelMap.fPixelColor[11][0], &connectedSequenceEleven, sizeof(connectedSequenceEleven));
+  uint8_t rOut = static_cast<uint8_t>((red * scale) + 0.5f);
+  uint8_t gOut = static_cast<uint8_t>((green * scale) + 0.5f);
+  uint8_t bOut = static_cast<uint8_t>((blue * scale) + 0.5f);
 
-  pixelMap.fDelayInMs = delayTime;  //75 
-  pixelMap.fNumCyclesBlock = blockingCycles; // 1
-}
-
-void LoadErrorAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
-{
-  memcpy(&pixelMap.fPixelColor[0][0], &errorSequenceZero, sizeof(errorSequenceZero));
-  memcpy(&pixelMap.fPixelColor[1][0], &errorSequenceOne, sizeof(errorSequenceOne));
-  memcpy(&pixelMap.fPixelColor[2][0], &errorSequenceTwo, sizeof(errorSequenceTwo));
-  memcpy(&pixelMap.fPixelColor[3][0], &errorSequenceThree, sizeof(errorSequenceThree));
-  memcpy(&pixelMap.fPixelColor[4][0], &errorSequenceFour, sizeof(errorSequenceFour));
-  memcpy(&pixelMap.fPixelColor[5][0], &errorSequenceFive, sizeof(errorSequenceFive));
-  memcpy(&pixelMap.fPixelColor[6][0], &errorSequenceSix, sizeof(errorSequenceSix));
-  memcpy(&pixelMap.fPixelColor[7][0], &errorSequenceSeven, sizeof(errorSequenceSeven));
-  memcpy(&pixelMap.fPixelColor[8][0], &errorSequenceEight, sizeof(errorSequenceEight));
-  memcpy(&pixelMap.fPixelColor[9][0], &errorSequenceNine, sizeof(errorSequenceNine));
-  memcpy(&pixelMap.fPixelColor[10][0], &errorSequenceTen, sizeof(errorSequenceTen));
-  memcpy(&pixelMap.fPixelColor[11][0], &errorSequenceEleven, sizeof(errorSequenceEleven));
-
-  pixelMap.fDelayInMs = delayTime;  // 75
-  pixelMap.fNumCyclesBlock = blockingCycles; //0
-}
-
-void LoadModeChangeAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
-{
-  memcpy(&pixelMap.fPixelColor[0][0], &modeChangeSequenceZero, sizeof(modeChangeSequenceZero));
-  memcpy(&pixelMap.fPixelColor[1][0], &modeChangeSequenceOne, sizeof(modeChangeSequenceOne));
-  memcpy(&pixelMap.fPixelColor[2][0], &modeChangeSequenceTwo, sizeof(modeChangeSequenceTwo));
-  memcpy(&pixelMap.fPixelColor[3][0], &modeChangeSequenceThree, sizeof(modeChangeSequenceThree));
-  memcpy(&pixelMap.fPixelColor[4][0], &modeChangeSequenceFour, sizeof(modeChangeSequenceFour));
-  memcpy(&pixelMap.fPixelColor[5][0], &modeChangeSequenceFive, sizeof(modeChangeSequenceFive));
-  memcpy(&pixelMap.fPixelColor[6][0], &modeChangeSequenceSix, sizeof(modeChangeSequenceSix));
-  memcpy(&pixelMap.fPixelColor[7][0], &modeChangeSequenceSeven, sizeof(modeChangeSequenceSeven));
-  memcpy(&pixelMap.fPixelColor[8][0], &modeChangeSequenceEight, sizeof(modeChangeSequenceEight));
-  memcpy(&pixelMap.fPixelColor[9][0], &modeChangeSequenceNine, sizeof(modeChangeSequenceNine));
-  memcpy(&pixelMap.fPixelColor[10][0], &modeChangeSequenceTen, sizeof(modeChangeSequenceTen));
-  memcpy(&pixelMap.fPixelColor[11][0], &modeChangeSequenceEleven, sizeof(modeChangeSequenceEleven));
-
-  pixelMap.fDelayInMs = delayTime;  // 75
-  pixelMap.fNumCyclesBlock = blockingCycles;  // 2
-}
-
-void LoadStartupAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles)
-{
-  memcpy(&pixelMap.fPixelColor[0][0], &startSequenceZero, sizeof(startSequenceZero));
-  memcpy(&pixelMap.fPixelColor[1][0], &startSequenceOne, sizeof(startSequenceOne));
-  memcpy(&pixelMap.fPixelColor[2][0], &startSequenceTwo, sizeof(startSequenceTwo));
-  memcpy(&pixelMap.fPixelColor[3][0], &startSequenceThree, sizeof(startSequenceThree));
-  memcpy(&pixelMap.fPixelColor[4][0], &startSequenceFour, sizeof(startSequenceFour));
-  memcpy(&pixelMap.fPixelColor[5][0], &startSequenceFive, sizeof(startSequenceFive));
-  memcpy(&pixelMap.fPixelColor[6][0], &startSequenceSix, sizeof(startSequenceSix));
-  memcpy(&pixelMap.fPixelColor[7][0], &startSequenceSeven, sizeof(startSequenceSeven));
-  memcpy(&pixelMap.fPixelColor[8][0], &startSequenceEight, sizeof(startSequenceEight));
-  memcpy(&pixelMap.fPixelColor[9][0], &startSequenceNine, sizeof(startSequenceNine));
-  memcpy(&pixelMap.fPixelColor[10][0], &startSequenceTen, sizeof(startSequenceTen));
-  memcpy(&pixelMap.fPixelColor[11][0], &startSequenceEleven, sizeof(startSequenceEleven));
-
-  pixelMap.fDelayInMs = delayTime;  // 80
-  pixelMap.fNumCyclesBlock = blockingCycles; // 1
-}
-
-// Speed settings 0 - 3, battery in percentage from 0 - 100%
-void LoadGaugeUpdateAnnimation(LedMap_t &pixelMap, uint32_t delayTime, int blockingCycles, uint32_t speed, uint32_t batteryPercentage)
-{
-  uint32_t speedColor = strip.Color(120, 120, 255); 
-  int ledMultiplier = round((strip.numPixels() / 2) / 3);
-
-  uint32_t speedPixelsOn = speed * ledMultiplier;     // Determines how many speed pixels should be on to represent new speed
-  // Serial.print("num speed pixels: ");
-  // Serial.println(speedPixelsOn);
-
-  uint32_t batteryPixelsOn = round(batteryPercentage / (100.0 / ((float)strip.numPixels() / 2.0)));
-  // Serial.println("Num bat pixels on:");
-  // Serial.println(batteryPercentage);
-  // Serial.println(batteryPixelsOn);
-
-  int speedCount = 0;
-  int batteryCount = 0;
-  for(int i = (strip.numPixels() / 2) - 1; i >= 0; i--)
+  // Build output buffer
+  for (int i = 0; i < LED_COUNT; i++) 
   {
-    if(speedCount < speedPixelsOn)
-    {
-      // Keep turning on speed LEDs until reached number of on
-      pixelMap.fPixelColor[0][i] = speedColor;
-    }
-    else
-    {
-      pixelMap.fPixelColor[0][i] = 0;  // Turn off unused LEDs
-    }
-    speedCount++;
+    outputColorBuffer[i] = strip.Color(rOut, gOut, bOut);
+  }
+}
+
+void PulseFrameGeneratorGreen(int index, uint32_t* outputColorBuffer)
+{
+  // Set default color to green
+  uint8_t red = 0;
+  uint8_t green = 255;
+  uint8_t blue = 0; 
+
+  // Dim down to off first half of annimation
+  int half = LED_COUNT / 2;
+  float scale = (index < half)
+                  ? 1.0f - (static_cast<float>(index) / half)
+                  : static_cast<float>(index - half) / half;
+
+  uint8_t rOut = static_cast<uint8_t>((red * scale) + 0.5f);
+  uint8_t gOut = static_cast<uint8_t>((green * scale) + 0.5f);
+  uint8_t bOut = static_cast<uint8_t>((blue * scale) + 0.5f);
+
+  // Build output buffer
+  for (int i = 0; i < LED_COUNT; i++) 
+  {
+    outputColorBuffer[i] = strip.Color(rOut, gOut, bOut);
+  }
+}
+
+void PulseFrameGeneratorBlue(int index, uint32_t* outputColorBuffer)
+{
+  // Set default color to green
+  uint8_t red = 120;
+  uint8_t green = 120;
+  uint8_t blue = 255; 
+
+  // Dim down to off first half of annimation
+  int half = LED_COUNT / 2;
+  float scale = (index < half)
+                  ? 1.0f - (static_cast<float>(index) / half)
+                  : static_cast<float>(index - half) / half;
+
+  uint8_t rOut = static_cast<uint8_t>((red * scale) + 0.5f);
+  uint8_t gOut = static_cast<uint8_t>((green * scale) + 0.5f);
+  uint8_t bOut = static_cast<uint8_t>((blue * scale) + 0.5f);
+
+  // Build output buffer
+  for (int i = 0; i < LED_COUNT; i++) 
+  {
+    outputColorBuffer[i] = strip.Color(rOut, gOut, bOut);
+  }
+}
+
+void CircularFrameGeneratorGreen(int frameIndex, uint32_t* outputColorBuffer)
+{
+    uint8_t red = 0;
+    uint8_t green = 255;
+    uint8_t blue = 0; 
+
+  // Define the circular path (0-indexed)
+  static const uint8_t path[] = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0
+  };
+  static const int pathLength = sizeof(path) / sizeof(path[0]);
+
+  const int trailLength = 3;  // Change this to light more LEDs (e.g., 1 = single point, 4 = 4 LEDs lit)
+
+  // Clear all LEDs first
+  for (int i = 0; i < LED_COUNT; ++i) {
+    outputColorBuffer[i] = strip.Color(0, 0, 0); // Off
   }
 
-  for(int i = strip.numPixels() / 2; i < strip.numPixels(); i++)
+  // Light up `trailLength` LEDs in the path
+  for (int t = 0; t < trailLength; ++t)
   {
-    if(batteryCount < batteryPixelsOn)
+    int step = (frameIndex - t + pathLength) % pathLength;
+    int ledIndex = path[step];
+
+    if (ledIndex >= 0 && ledIndex < LED_COUNT)
     {
-      // Keep turning on speed LEDs until reached number of on
-      pixelMap.fPixelColor[0][i] = batteryColorIndex[batteryCount];
+      // Optional: Fade tail by intensity
+      float fade = 1.0f - (float)t / trailLength;
+      uint8_t r = static_cast<uint8_t>(0 * fade);
+      uint8_t g = static_cast<uint8_t>(255 * fade);
+      uint8_t b = static_cast<uint8_t>(0 * fade * fade);
+
+      outputColorBuffer[ledIndex] = strip.Color(r, g, b);
     }
-    else
-    {
-      pixelMap.fPixelColor[0][i] = 0;  // Turn off unused LEDs
-    }
-    batteryCount++;
   }
-
-  // Copy oth index with correct color setting to rest of pixel map
-  for(int i = 1; i < 12; i++)
-  {
-    memcpy(&pixelMap.fPixelColor[i], &pixelMap.fPixelColor[0], sizeof(pixelMap.fPixelColor[0]));
-  }
-
-
-  // for(int i = 0; i < strip.numPixels() / 2; i++)
-  // {
-  //   for(int j = 0; j < strip.numPixels() / 2; j++)
-  //   {
-  //     // First 6 pixels are speed, set all 12 pixel sets to same speed #
-  //     if(j < speedPixelsOn)
-  //     {
-  //       // Set current speed pixel on
-  //       pixelMap.fPixelColor[i][j] = speedColor;
-  //     }
-  //     else
-  //     {
-  //       pixelMap.fPixelColor[i][j] = 0;     // Make sure other pixels are off
-  //     }
-
-  //     // Last 6 pixels are battery, set all 12 pixel sets to same battery #
-  //     if(j < batteryPixelsOn)
-  //     {
-  //       // Set current battery pixel on
-  //       pixelMap.fPixelColor[i][strip.numPixels() - j - 1] = batteryColorIndex[j];
-  //     }
-  //     else
-  //     {
-  //       pixelMap.fPixelColor[i][strip.numPixels() - j - 1] = 0;     // Make sure other pixels are off
-  //     }
-  //   }
-  // }
-  pixelMap.fDelayInMs = delayTime;  //200
-  pixelMap.fNumCyclesBlock = blockingCycles;  // 
 }
 
+std::function<void(int, uint32_t*)> MakeGaugeFrameGenerator(uint8_t speed, uint32_t batteryPercentage)
+{
+  return [=](int frameIndex, uint32_t* ledOutputColorBuffer)
+  {
+    const uint32_t speedColor = strip.Color(120, 120, 255);
+    const int half = LED_COUNT / 2;
 
+    // Calculate # of pixels to turn on
+    int ledMultiplier = round(half / 3.0f);
+    int speedPixelsOn = speed * ledMultiplier;
+    int batteryPixelsOn = round(batteryPercentage / (100.0 / (float)half));
+
+    // Set speed LEDs (first half)
+    for (int i = half - 1, count = 0; i >= 0; --i, ++count)
+    {
+      ledOutputColorBuffer[i] = (count < speedPixelsOn) ? speedColor : 0;
+    }
+
+    // Set battery LEDs (second half)
+    for (int i = half, count = 0; i < LED_COUNT; ++i, ++count)
+    {
+      ledOutputColorBuffer[i] = (count < batteryPixelsOn) ? batteryColorIndex[count] : 0;
+    }
+  };
+}
+
+// std::function<void(int, uint32_t*)> MakeRampUpHalfRingGenerator(const std::vector<uint32_t>& colorPalette)
+// {
+//   constexpr int NUM_PIXELS = 12;
+
+//   // Define the ramp-up order for each side of the ring
+//   const uint8_t leftSide[]  = {0, 1, 2, 3, 4, 5, 6};
+//   const uint8_t rightSide[] = {11, 10, 9, 8, 7};
+
+//   // Total steps = max length of the longest side
+//   const int maxSteps = std::max(sizeof(leftSide), sizeof(rightSide));
+
+//   return [=](int frameIndex, uint32_t* ledOutputColorBuffer)
+//   {
+//     // Clear buffer first
+//     memset(ledOutputColorBuffer, 0, NUM_PIXELS * sizeof(uint32_t));
+
+//     // Get color for this frame from palette (loops around if needed)
+//     uint32_t color = colorPalette[frameIndex % colorPalette.size()];
+
+//     // Fade scale per pixel step (0.0 to 1.0)
+//     for (int i = 0; i <= frameIndex && i < maxSteps; ++i)
+//     {
+//       float brightness = static_cast<float>(i + 1) / maxSteps;
+
+//       uint8_t r = (uint8_t)(((color >> 16) & 0xFF) * brightness);
+//       uint8_t g = (uint8_t)(((color >> 8) & 0xFF) * brightness);
+//       uint8_t b = (uint8_t)((color & 0xFF) * brightness);
+
+//       if (i < sizeof(leftSide))
+//         ledOutputColorBuffer[leftSide[i]] = strip.Color(r, g, b);
+
+//       if (i < sizeof(rightSide))
+//         ledOutputColorBuffer[rightSide[i]] = strip.Color(r, g, b);
+//     }
+//   };
+// }
 
 
 

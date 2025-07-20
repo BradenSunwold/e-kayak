@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 // Define LED ring
 #define PIXEL_PIN 10
 #define LED_COUNT 12
@@ -7,9 +9,10 @@ Adafruit_NeoPixel strip(LED_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 typedef struct
 {
-  uint32_t fPixelColor[12][12];
+  std::function<void(int, uint32_t*)> fFrameGenerator;  // Function to generate frame
   uint32_t fDelayInMs;
   int fNumCyclesBlock;
+  int fNumFrames;
 } LedMap_t;
 
 // Global variables for pixel map tests - too big to store in local stack

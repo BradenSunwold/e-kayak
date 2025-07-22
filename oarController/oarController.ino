@@ -63,7 +63,7 @@ typedef struct
 typedef struct
 {
   bool fAutoMode;
-  uint8_t fSpeed;     // 0 - 100% of max RPM
+  uint8_t fSpeed;     // 0 - 3 (off, low, medium, high)
 } PaddleCmdMsg_t;
 
 typedef struct
@@ -367,7 +367,6 @@ static void ButtonInputTask( void *pvParameters )
   volatile TickType_t doubleClickTimeInMs = 0;
   volatile TickType_t doubleClickDelayInMs = 300;   // the double click time frame, lower if double click seem laggy
 
-
   while(1)
   {
 
@@ -466,10 +465,10 @@ static void ProcessOutputsTask( void *pvParameters )
   PaddleCmdMsg_t paddleCmdMsg;
   LedMap_t ledMsg;
 
-  float kayakBatteryVolt = 26;
+  float kayakBatteryPercentage = 26;
   float oarbatteryVolt = 4.2;
-  uint32_t batteryPercentageReport = 100;
-  uint32_t prevBatteryPercentage = 99;    // Set prev percentage 99 to force an animation update
+  uint32_t totalBatteryPercentageReport = 100;
+  uint32_t prevTotalBatteryPercentage = 99;    // Set prev percentage 99 to force an animation update
 
   uint32_t downSampleBatteryReadCount = 0;
 
@@ -588,9 +587,20 @@ static void ProcessOutputsTask( void *pvParameters )
             xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
             break;
 
+          case eSpeedPercentage :                                   // Check for reported speed percentage
+            ledMsg = 
+            {
+              .fFrameGenerator = GaugeFrameGenerator(speed, totalBatteryPercentageReport),   // TODO: update to percentage based update
+              .fDelayInMs = 200,
+              .fNumCyclesBlock = 0,
+              .fNumFrames = LED_COUNT
+            };
+            xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+            break;
+
           case eBatteryPercentage :                                 // Then check for battery status
             // Package kayak battery voltage for output processor
-            kayakBatteryVolt = kayakStatusMsg.fStatusData;
+            kayakBatteryPercentage = kayakStatusMsg.fStatusData;
             break;
           
           default :
@@ -610,16 +620,16 @@ static void ProcessOutputsTask( void *pvParameters )
       oarBatteryVoltage /= 1024;     // convert to voltage
 
       // Normalize battery voltages between 0 - 100% - equation based on voltage curves
-      float kayakBatteryPercentage = (1.0234 * (kayakBatteryVolt * kayakBatteryVolt * kayakBatteryVolt)) - (69.144 * (kayakBatteryVolt * kayakBatteryVolt)) 
-                                                    + (1556 * kayakBatteryVolt) - 11654;
-      if(kayakBatteryPercentage > 100)
-      {
-        kayakBatteryPercentage = 100;
-      }
-      else if(kayakBatteryPercentage < 0)
-      {
-        kayakBatteryPercentage = 0;
-      }
+      // float kayakBatteryPercentage = (1.0234 * (kayakBatteryVolt * kayakBatteryVolt * kayakBatteryVolt)) - (69.144 * (kayakBatteryVolt * kayakBatteryVolt)) 
+      //                                               + (1556 * kayakBatteryVolt) - 11654;
+      // if(kayakBatteryPercentage > 100)
+      // {
+      //   kayakBatteryPercentage = 100;
+      // }
+      // else if(kayakBatteryPercentage < 0)
+      // {
+      //   kayakBatteryPercentage = 0;
+      // }
 
       float oarBatteryPercentage = (-114.3 * (oarBatteryVoltage * oarBatteryVoltage)) + (959.22 * oarBatteryVoltage) - 1909.5;
       if(oarBatteryPercentage > 100)
@@ -633,20 +643,20 @@ static void ProcessOutputsTask( void *pvParameters )
 
       if(kayakBatteryPercentage > oarBatteryPercentage)
       {
-        batteryPercentageReport = (uint32_t) oarBatteryPercentage;
+        totalBatteryPercentageReport = (uint32_t) oarBatteryPercentage;
       }
       else
       {
-        batteryPercentageReport = (uint32_t) kayakBatteryPercentage;
+        totalBatteryPercentageReport = (uint32_t) kayakBatteryPercentage;
       }
     }
 
-    if(!gMotorFaultFlag && !connectingFlag && !gComsTimeoutFlag && batteryPercentageReport != prevBatteryPercentage)
+    if(!gMotorFaultFlag && !connectingFlag && !gComsTimeoutFlag && totalBatteryPercentageReport != prevTotalBatteryPercentage)
     {
       // Only send new battery status if battery level has changed
       ledMsg = 
       {
-        .fFrameGenerator = GaugeFrameGenerator(speed, batteryPercentageReport),
+        .fFrameGenerator = GaugeFrameGenerator(speed, totalBatteryPercentageReport),
         .fDelayInMs = 200,
         .fNumCyclesBlock = 0,
         .fNumFrames = LED_COUNT
@@ -654,8 +664,8 @@ static void ProcessOutputsTask( void *pvParameters )
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
       Serial.println("Sending new battery status");
       Serial.println(speed);
-      Serial.println(batteryPercentageReport);
-      prevBatteryPercentage = batteryPercentageReport;
+      Serial.println(totalBatteryPercentageReport);
+      prevTotalBatteryPercentage = totalBatteryPercentageReport;
     }
 
     // Next check current state and report to LED driver / RF out any changes
@@ -689,17 +699,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
-          // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
-          ledMsg = 
-          {
-            .fFrameGenerator = GaugeFrameGenerator(speed, batteryPercentageReport),
-            .fDelayInMs = 200,
-            .fNumCyclesBlock = 0,
-            .fNumFrames = LED_COUNT
-          };
-          Serial.print("Speed: ");
-          Serial.println(paddleCmdMsg.fSpeed);
-          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+          // Only report to RF output if we arn't currently faulted or trying to re-connect
           xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
         }
       }

@@ -45,7 +45,8 @@ sh2_SensorValue_t sensorValue;
 // Structs / Enums
 typedef enum
 {
-  eBatteryVolt,
+  eBatteryPercentage,
+  eSpeedPercentage,
   eLowBattery, 
   eHighCurrent, 
   eComsLoss,
@@ -56,14 +57,14 @@ typedef enum
 typedef struct 
 {
   StatusType_t fStatusType;
-  float fStatusData;
-} StatusMsg_t;
+  uint8_t fStatusData;
+} KayakFeedbackMsg_t;
 
 typedef struct
 {
   bool fAutoMode;
-  uint8_t fSpeed;     // 0 = off, 1 = low speed, 2 = med speed, 3 = high speed
-} StateMsg_t;
+  uint8_t fSpeed;     // 0 - 100% of max RPM
+} PaddleCmdMsg_t;
 
 typedef struct
 {
@@ -93,14 +94,8 @@ typedef struct
 
 typedef struct 
 {
-  StateMsg_t fOutputState;
-  FullImuDataSet_t fOutputImu;
-} RfOutputMsg_t;
-
-typedef struct 
-{
   uint8_t fMessageIndex_1;
-  StateMsg_t fOutputState;
+  PaddleCmdMsg_t fOutputCmd;
   ImuDataType_t fOutputImuEuler;
   float fPad[3];
 } RfOutputMsgFirstHalf_t;
@@ -233,7 +228,7 @@ void myDelayMsUntil(TickType_t *previousWakeTime, int ms)
 static void ReadRfTask( void *pvParameters ) 
 {
   // Struct to locally store incoming RF data
-  StatusMsg_t incomingData;
+  KayakFeedbackMsg_t incomingData;
 
   // Vars to track coms timeout to motor
   volatile TickType_t lastReceivedMsgTimeInTicks = xTaskGetTickCount();
@@ -363,7 +358,7 @@ static void ButtonInputTask( void *pvParameters )
   uint32_t buttonStateChangeCount = 0;
 
   // Initialize button state message
-  StateMsg_t currButtonState;
+  PaddleCmdMsg_t currButtonState;
   currButtonState.fAutoMode = false;
   currButtonState.fSpeed = 0;
 
@@ -467,8 +462,8 @@ static void ProcessOutputsTask( void *pvParameters )
   bool autoMode = false;
   uint32_t speed = 0;
 
-  StatusMsg_t kayakStatusMsg;
-  StateMsg_t stateMsg;
+  KayakFeedbackMsg_t kayakStatusMsg;
+  PaddleCmdMsg_t paddleCmdMsg;
   LedMap_t ledMsg;
 
   float kayakBatteryVolt = 26;
@@ -593,7 +588,7 @@ static void ProcessOutputsTask( void *pvParameters )
             xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
             break;
 
-          case eBatteryVolt :                                 // Then check for battery status
+          case eBatteryPercentage :                                 // Then check for battery status
             // Package kayak battery voltage for output processor
             kayakBatteryVolt = kayakStatusMsg.fStatusData;
             break;
@@ -664,12 +659,12 @@ static void ProcessOutputsTask( void *pvParameters )
     }
 
     // Next check current state and report to LED driver / RF out any changes
-    if(xQueueReceive(currentStateQueue, (void *)&stateMsg, 0) == pdTRUE)
+    if(xQueueReceive(currentStateQueue, (void *)&paddleCmdMsg, 0) == pdTRUE)
     {
-      if((stateMsg.fAutoMode && !autoMode) || (!stateMsg.fAutoMode && autoMode))
+      if((paddleCmdMsg.fAutoMode && !autoMode) || (!paddleCmdMsg.fAutoMode && autoMode))
       {
         // Toggle autoMode
-        autoMode = stateMsg.fAutoMode;
+        autoMode = paddleCmdMsg.fAutoMode;
 
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
@@ -682,15 +677,15 @@ static void ProcessOutputsTask( void *pvParameters )
             .fNumFrames = LED_COUNT
           };
           Serial.print("Mode: ");
-          Serial.println(stateMsg.fAutoMode);
+          Serial.println(paddleCmdMsg.fAutoMode);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-          xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
+          xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
         }
 
       }
-      else if(stateMsg.fSpeed != speed)
+      else if(paddleCmdMsg.fSpeed != speed)
       {
-        speed = stateMsg.fSpeed;                            // Update local speed checker variable
+        speed = paddleCmdMsg.fSpeed;                            // Update local speed checker variable
 
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
@@ -703,9 +698,9 @@ static void ProcessOutputsTask( void *pvParameters )
             .fNumFrames = LED_COUNT
           };
           Serial.print("Speed: ");
-          Serial.println(stateMsg.fSpeed);
+          Serial.println(paddleCmdMsg.fSpeed);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-          xQueueSend(rfOutMsgQueue, (void *)&stateMsg, 1);
+          xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
         }
       }
     }
@@ -874,11 +869,11 @@ static void LedPixelUpdaterTester( void *pvParameters )
 
 static void RfOutputTask( void *pvParameters )
 {
-  StateMsg_t stateDataOut;
+  PaddleCmdMsg_t PaddleCmdOut;
 
   // Initialize state data
-  stateDataOut.fAutoMode = false;
-  stateDataOut.fSpeed = 0;
+  PaddleCmdOut.fAutoMode = false;
+  PaddleCmdOut.fSpeed = 0;
 
   FullImuDataSet_t imuDataOut;
   RfOutputMsgFirstHalf_t outputMsgFirstHalf;
@@ -896,7 +891,7 @@ static void RfOutputTask( void *pvParameters )
   imuDataOut.fAddReportsVect.fZ.fGyro = 0.0;
 
   outputMsgFirstHalf.fMessageIndex_1 = 1;
-  outputMsgFirstHalf.fOutputState = stateDataOut;
+  outputMsgFirstHalf.fOutputCmd = PaddleCmdOut;
   outputMsgFirstHalf.fOutputImuEuler = imuDataOut.fEulerData;
 
   outputMsgSecondHalf.fMessageIndex_2 = 2;
@@ -915,10 +910,10 @@ static void RfOutputTask( void *pvParameters )
       memcpy(&outputMsgFirstHalf.fOutputImuEuler, &imuDataOut.fEulerData, sizeof(imuDataOut.fEulerData));
       memcpy(&outputMsgSecondHalf.fOutputImuAddReports, &imuDataOut.fAddReportsVect, sizeof(imuDataOut.fAddReportsVect));
     }
-    if(xQueueReceive(rfOutMsgQueue, (void *)&stateDataOut, 0) == pdTRUE)
+    if(xQueueReceive(rfOutMsgQueue, (void *)&PaddleCmdOut, 0) == pdTRUE)
     {
       // Package state into RF output struct
-      memcpy(&outputMsgFirstHalf.fOutputState, &stateDataOut, sizeof(stateDataOut));
+      memcpy(&outputMsgFirstHalf.fOutputCmd, &PaddleCmdOut, sizeof(PaddleCmdOut));
       // Serial.println(outputMsgFirstHalf.fOutputState.fAutoMode);
       // Serial.println(outputMsgFirstHalf.fOutputState.fSpeed);
     }
@@ -1178,11 +1173,11 @@ void setup()
   strip.setBrightness(45); // Set BRIGHTNESS to about 1/5 (max = 255)
 
   // Create queues
-  rfInMsgQueue = xQueueCreate(msgQueueLength, sizeof(StatusMsg_t));
+  rfInMsgQueue = xQueueCreate(msgQueueLength, sizeof(PaddleCmdMsg_t));
   imuDataQueue = xQueueCreate(1, sizeof(FullImuDataSet_t));                 // Only care about most up to date IMU data
-  kayakStatusQueue = xQueueCreate(msgQueueLength, sizeof(StatusMsg_t));
-  currentStateQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
-  rfOutMsgQueue = xQueueCreate(msgQueueLength, sizeof(StateMsg_t));
+  kayakStatusQueue = xQueueCreate(msgQueueLength, sizeof(KayakFeedbackMsg_t));
+  currentStateQueue = xQueueCreate(msgQueueLength, sizeof(PaddleCmdMsg_t));
+  rfOutMsgQueue = xQueueCreate(msgQueueLength, sizeof(PaddleCmdMsg_t));
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Set all task call rates

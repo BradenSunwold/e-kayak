@@ -107,7 +107,7 @@ typedef struct
 } RfOutputMsgSecondHalf_t;
 
 // Forward decs
-std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speed, uint32_t batteryPercentage);
+std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speedPercentage, uint8_t batteryPercentage);
 std::function<void(int, uint32_t*)> StartupFrameGenerator(const uint32_t* leftHalfColors, const uint32_t* rightHalfColors);
 
 
@@ -459,7 +459,8 @@ static void ProcessOutputsTask( void *pvParameters )
   bool connectingFlag = false;
 
   bool autoMode = false;
-  uint32_t speed = 0;
+  uint8_t speedPercentageReported = 0;
+  uint8_t speedPercentageCommanded = 0; 
 
   KayakFeedbackMsg_t kayakStatusMsg;
   PaddleCmdMsg_t paddleCmdMsg;
@@ -588,9 +589,10 @@ static void ProcessOutputsTask( void *pvParameters )
             break;
 
           case eSpeedPercentage :                                   // Check for reported speed percentage
+            speedPercentageReported = kayakStatusMsg.fStatusData;
             ledMsg = 
             {
-              .fFrameGenerator = GaugeFrameGenerator(speed, totalBatteryPercentageReport),   // TODO: update to percentage based update
+              .fFrameGenerator = GaugeFrameGenerator(speedPercentageReported, totalBatteryPercentageReport), 
               .fDelayInMs = 200,
               .fNumCyclesBlock = 0,
               .fNumFrames = LED_COUNT
@@ -656,14 +658,14 @@ static void ProcessOutputsTask( void *pvParameters )
       // Only send new battery status if battery level has changed
       ledMsg = 
       {
-        .fFrameGenerator = GaugeFrameGenerator(speed, totalBatteryPercentageReport),
+        .fFrameGenerator = GaugeFrameGenerator(speedPercentageReported, totalBatteryPercentageReport),
         .fDelayInMs = 200,
         .fNumCyclesBlock = 0,
         .fNumFrames = LED_COUNT
       };
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
       Serial.println("Sending new battery status");
-      Serial.println(speed);
+      Serial.println(speedPercentageReported);
       Serial.println(totalBatteryPercentageReport);
       prevTotalBatteryPercentage = totalBatteryPercentageReport;
     }
@@ -693,9 +695,9 @@ static void ProcessOutputsTask( void *pvParameters )
         }
 
       }
-      else if(paddleCmdMsg.fSpeed != speed)
+      else if(paddleCmdMsg.fSpeed != speedPercentageCommanded)
       {
-        speed = paddleCmdMsg.fSpeed;                            // Update local speed checker variable
+        speedPercentageCommanded = paddleCmdMsg.fSpeed;                            // Update local speed checker variable
 
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
@@ -805,7 +807,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
 static void LedPixelUpdaterTester( void *pvParameters )
 {
   // Mechanisms to track when to push Pixel maps into queues
-  uint32_t queueInsertDelayInMs = 500;   // Delay between pushing each pixel map to queue
+  uint32_t queueInsertDelayInMs = 500;    // Delay between pushing each pixel map to queue
   uint32_t loadNextSetDelayInMs = 7000;   // Delay between loading full next set of pixel map transitions - should be greater than queueInsertDelay * totalAnimations
 
   volatile TickType_t nextQueueInsertTimeout = xTaskGetTickCount() + (queueInsertDelayInMs / portTICK_PERIOD_MS); 
@@ -1339,7 +1341,7 @@ void CircularFrameGeneratorGreen(int frameIndex, uint32_t* outputColorBuffer)
   }
 }
 
-std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speed, uint32_t batteryPercentage)
+std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speedPercentage, uint8_t batteryPercentage)
 {
   return [=](int frameIndex, uint32_t* ledOutputColorBuffer)
   {
@@ -1347,9 +1349,10 @@ std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speed, uint32_t 
     const int half = LED_COUNT / 2;
 
     // Calculate # of pixels to turn on
-    int ledMultiplier = round(half / 3.0f);
-    int speedPixelsOn = speed * ledMultiplier;
+    // int ledMultiplier = round(half / 3.0f);
+    // int speedPixelsOn = speed * ledMultiplier;
     int batteryPixelsOn = round(batteryPercentage / (100.0 / (float)half));
+    int speedPixelsOn = round(speedPercentage / (100.0 / (float)half));
 
     // Set speed LEDs (first half)
     for (int i = half - 1, count = 0; i >= 0; --i, ++count)

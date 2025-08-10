@@ -459,8 +459,9 @@ static void ProcessOutputsTask( void *pvParameters )
   bool connectingFlag = false;
 
   bool autoMode = false;
-  uint16_t speedPercentageReported = 0;
-  uint16_t speedPercentageCommanded = 0; 
+  float speedPercentageReported = 0;
+  float previousSpeedPercentageReported = 0;
+  float speedPercentageCommanded = 0; 
 
   KayakFeedbackMsg_t kayakStatusMsg;
   PaddleCmdMsg_t paddleCmdMsg;
@@ -506,7 +507,7 @@ static void ProcessOutputsTask( void *pvParameters )
       ledMsg = 
       {
         .fFrameGenerator = CircularFrameGeneratorGreen,      // When commenting this out, after two cycles I see no animations
-        .fDelayInMs = 50,
+        .fDelayInMs = 75,
         .fNumCyclesBlock = 1,
         .fNumFrames = LED_COUNT
       };
@@ -524,7 +525,7 @@ static void ProcessOutputsTask( void *pvParameters )
           ledMsg = 
           {
             .fFrameGenerator = PulseFrameGeneratorGreen,
-            .fDelayInMs = 75,
+            .fDelayInMs = 100,
             .fNumCyclesBlock = 1,
             .fNumFrames = LED_COUNT
           };
@@ -534,7 +535,7 @@ static void ProcessOutputsTask( void *pvParameters )
           ledMsg = 
           {
             .fFrameGenerator = StartupFrameGenerator(leftColorsStartupAni, rightColorsStartupAni),
-            .fDelayInMs = 80,
+            .fDelayInMs = 100,
             .fNumCyclesBlock = 1,
             .fNumFrames = LED_COUNT
           };
@@ -558,7 +559,7 @@ static void ProcessOutputsTask( void *pvParameters )
             ledMsg = 
             {
               .fFrameGenerator = PulseFrameGeneratorRed,
-              .fDelayInMs = 75,
+              .fDelayInMs = 100,
               .fNumCyclesBlock = 0,
               .fNumFrames = LED_COUNT
             };
@@ -572,7 +573,7 @@ static void ProcessOutputsTask( void *pvParameters )
             ledMsg = 
             {
               .fFrameGenerator = PulseFrameGeneratorGreen,
-              .fDelayInMs = 75,
+              .fDelayInMs = 100,
               .fNumCyclesBlock = 1,
               .fNumFrames = LED_COUNT
             };
@@ -581,7 +582,7 @@ static void ProcessOutputsTask( void *pvParameters )
             ledMsg = 
             {
               .fFrameGenerator = StartupFrameGenerator(leftColorsStartupAni, rightColorsStartupAni),
-              .fDelayInMs = 80,
+              .fDelayInMs = 100,
               .fNumCyclesBlock = 1,
               .fNumFrames = LED_COUNT
             };
@@ -590,14 +591,21 @@ static void ProcessOutputsTask( void *pvParameters )
 
           case eSpeedPercentage :                                   // Check for reported speed percentage
             speedPercentageReported = kayakStatusMsg.fStatusData;
-            ledMsg = 
+            
+            // Only send update to display if speed actually changed
+            if(speedPercentageReported != previousSpeedPercentageReported)
             {
-              .fFrameGenerator = GaugeFrameGenerator(speedPercentageReported, totalBatteryPercentageReport), 
-              .fDelayInMs = 200,
-              .fNumCyclesBlock = 0,
-              .fNumFrames = LED_COUNT
-            };
-            xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+              ledMsg = 
+              {
+                .fFrameGenerator = GaugeFrameGenerator(speedPercentageReported, totalBatteryPercentageReport), 
+                .fDelayInMs = 50,
+                .fNumCyclesBlock = 0,
+                .fNumFrames = LED_COUNT
+              };
+              xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+
+              previousSpeedPercentageReported = speedPercentageReported;  // Updated previous speed
+            }
             break;
 
           case eBatteryPercentage :                                 // Then check for battery status
@@ -620,18 +628,6 @@ static void ProcessOutputsTask( void *pvParameters )
       oarBatteryVoltage *= 2;        // Account for voltage divider
       oarBatteryVoltage *= 3.3;      // Multiply by 3.3V - reference voltage
       oarBatteryVoltage /= 1024;     // convert to voltage
-
-      // Normalize battery voltages between 0 - 100% - equation based on voltage curves
-      // float kayakBatteryPercentage = (1.0234 * (kayakBatteryVolt * kayakBatteryVolt * kayakBatteryVolt)) - (69.144 * (kayakBatteryVolt * kayakBatteryVolt)) 
-      //                                               + (1556 * kayakBatteryVolt) - 11654;
-      // if(kayakBatteryPercentage > 100)
-      // {
-      //   kayakBatteryPercentage = 100;
-      // }
-      // else if(kayakBatteryPercentage < 0)
-      // {
-      //   kayakBatteryPercentage = 0;
-      // }
 
       float oarBatteryPercentage = (-114.3 * (oarBatteryVoltage * oarBatteryVoltage)) + (959.22 * oarBatteryVoltage) - 1909.5;
       if(oarBatteryPercentage > 100)
@@ -659,7 +655,7 @@ static void ProcessOutputsTask( void *pvParameters )
       ledMsg = 
       {
         .fFrameGenerator = GaugeFrameGenerator(speedPercentageReported, totalBatteryPercentageReport),
-        .fDelayInMs = 200,
+        .fDelayInMs = 50,
         .fNumCyclesBlock = 0,
         .fNumFrames = LED_COUNT
       };
@@ -667,7 +663,8 @@ static void ProcessOutputsTask( void *pvParameters )
       Serial.println("Sending new battery status");
       Serial.println(speedPercentageReported);
       Serial.println(totalBatteryPercentageReport);
-      prevTotalBatteryPercentage = totalBatteryPercentageReport;
+
+      prevTotalBatteryPercentage = totalBatteryPercentageReport;  // Update previous battery percentate
     }
 
     // Next check current state and report to LED driver / RF out any changes
@@ -684,7 +681,7 @@ static void ProcessOutputsTask( void *pvParameters )
           ledMsg = 
           {
             .fFrameGenerator = PulseFrameGeneratorBlue,
-            .fDelayInMs = 75,
+            .fDelayInMs = 100,
             .fNumCyclesBlock = 2,
             .fNumFrames = LED_COUNT
           };
@@ -721,20 +718,12 @@ static void LedPixelUpdaterTask( void *pvParameters )
 {
   // Default annimation to connecting
   LedMap_t pixelMap;
-  //  = 
-  //         {
-  //           .fFrameGenerator = CircularFrameGeneratorGreen,
-  //           .fDelayInMs = 50,
-  //           .fNumCyclesBlock = 1,
-  //           .fNumFrames = LED_COUNT
-  //         };
 
   // Mechanism to track when next annimation update should be  
   volatile TickType_t currPixelTimeout = xTaskGetTickCount();
   volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);  
 
   volatile int cycleCount = 0;    // Counter to track frame cycles
-  volatile int taskDelay = 25;
   
   while(1)
   {
@@ -1153,6 +1142,7 @@ void setup()
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_MIN);
   radio.setRetries(3, 3);       // Need to test with Rx and Tx running on motor and oar
+  radio.setAutoAck(false);
 
   // SETUP Button
   pinMode(BUTTON_PIN, INPUT);
@@ -1183,12 +1173,12 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Set all task call rates
-  gReadRfTaskRateInMs = 200; 
+  gReadRfTaskRateInMs = 100; 
   gReadImuTaskRateInMs = 50; 
-  gProcessOutTaskRateInMs = 200; 
+  gProcessOutTaskRateInMs = 100; 
   gButtonInTaskRateInMs = 20; 
   gWriteRfTaskRateInMs = 50; 
-  gLedDriverTaskRateInMs = 50; 
+  gLedDriverTaskRateInMs = 25; 
   gLedTesterTaskRateInMs = 50; 
   gDiagDumpTaskRateInMs = 5000; 
 
@@ -1198,7 +1188,7 @@ void setup()
   xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 8, &Handle_ButtonInputTask);                    // 336 bytes
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 130, NULL, tskIDLE_PRIORITY + 4, &Handle_ProcessOutputsTask);        // 936 bytes
   xTaskCreate(RfOutputTask, "RF Out", 140, NULL, tskIDLE_PRIORITY + 7, &Handle_RfOutputTask);                             // 432 bytes
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 6, &Handle_LedPixelUpdaterTask);        // 928 bytes
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
   xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 100, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
@@ -1241,8 +1231,8 @@ void PulseFrameGeneratorRed(int index, uint32_t* outputColorBuffer)
   // Dim down to off first half of annimation
   int half = LED_COUNT / 2;
   float scale = (index < half)
-                  ? 1.0f - (static_cast<float>(index) / half)
-                  : static_cast<float>(index - half) / half;
+                ? static_cast<float>(index) / half        // 0 → 1
+                : 1.0f - (static_cast<float>(index - half) / half); // 1 → 0
 
   uint8_t rOut = static_cast<uint8_t>((red * scale) + 0.5f);
   uint8_t gOut = static_cast<uint8_t>((green * scale) + 0.5f);
@@ -1265,8 +1255,8 @@ void PulseFrameGeneratorGreen(int index, uint32_t* outputColorBuffer)
   // Dim down to off first half of annimation
   int half = LED_COUNT / 2;
   float scale = (index < half)
-                  ? 1.0f - (static_cast<float>(index) / half)
-                  : static_cast<float>(index - half) / half;
+                ? static_cast<float>(index) / half        // 0 → 1
+                : 1.0f - (static_cast<float>(index - half) / half); // 1 → 0
 
   uint8_t rOut = static_cast<uint8_t>((red * scale) + 0.5f);
   uint8_t gOut = static_cast<uint8_t>((green * scale) + 0.5f);
@@ -1289,8 +1279,8 @@ void PulseFrameGeneratorBlue(int index, uint32_t* outputColorBuffer)
   // Dim down to off first half of annimation
   int half = LED_COUNT / 2;
   float scale = (index < half)
-                  ? 1.0f - (static_cast<float>(index) / half)
-                  : static_cast<float>(index - half) / half;
+                ? static_cast<float>(index) / half        // 0 → 1
+                : 1.0f - (static_cast<float>(index - half) / half); // 1 → 0
 
   uint8_t rOut = static_cast<uint8_t>((red * scale) + 0.5f);
   uint8_t gOut = static_cast<uint8_t>((green * scale) + 0.5f);

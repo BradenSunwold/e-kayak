@@ -169,13 +169,13 @@ class MotorManager(threading.Thread):
                 self.mDutyCycle = response.duty_now
                 self.mTemp = response.temp_fets
                 self.mPowerMotorIn = self.mVoltage * self.mCurrentIn
-                self.mRpmFeedback = response.rpm
+                self.mRpmFeedback = response.rpm / 6                    # Divide ERPM by # poles to get RPM
                 
                 # Log motor values
                 self.mLogger.info('*** MOTOR STATUS ***:')
                 self.mLogger.info('Fet Temperature: %s', response.temp_fets)
                 self.mLogger.info('Duty Cycle: %s', response.duty_now)
-                self.mLogger.info('RPM: %s', response.rpm)
+                self.mLogger.info('RPM: %s', response.rpm / 6)
                 self.mLogger.info('VESC measured Input Voltage: %s', response.v_in)
                 self.mLogger.info('Calibrated Input Voltage: %s', self.mVoltage)
                 self.mLogger.info('Current In: %s', response.current_in)
@@ -207,7 +207,14 @@ class MotorManager(threading.Thread):
                     
                     # Send speed percentage
                     self.mStatus = StatusType.eSpeedPercentageReport
-                    speedPercentage = (self.mRpmFeedback / self.mMaxRpms) * 100
+                    speedPercentage = (abs(self.mRpmFeedback) / self.mMaxRpms) * 100
+                    
+                    # Cap speed percentage to 0 - 100%
+                    if(speedPercentage > 100) :
+                        speedPercentage = 100
+                    elif(speedPercentage < 0) :
+                        speedPercentage = 0
+                        
                     self.mLogger.info('Sending Speed Percentage: %s', speedPercentage)
                     payload = struct.pack('hf', self.mStatus, speedPercentage) 
                     self.mOutgoingQueue.put(payload)

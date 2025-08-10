@@ -69,6 +69,7 @@ class RfManager(threading.Thread):
     self.mRadio.set_pa_level(RF24_PA_LOW)  # RF24_PA_LOW tested in box at 15 feet
     self.mRadio.open_tx_pipe(self.mAddress[self.mRadioNumber])  
     self.mRadio.open_rx_pipe(1, self.mAddress[not self.mRadioNumber])  
+    self.mRadio.set_auto_ack(False)
 
   def RfSend(self):
    

@@ -3,8 +3,8 @@ from enum import IntEnum
 
 
 class StatusType(IntEnum):
-  eBatteryVolt = 0
-  eStartup = 1
+  eBatteryVoltPercentage = 0
+  eSpeedPercentageReport = 1
   eLowBattery = 2 
   eHighCurrent = 3 
   eComsLoss = 4
@@ -12,8 +12,8 @@ class StatusType(IntEnum):
   eFaultCleared = 6
   
 class MotorCmd(IntEnum):
-  eMode = 0
-  eRpm = 1
+  eModeCmd = 0
+  eSpeedCmd = 1
   
 class VescFaultCodes(IntEnum) :
   FAULT_CODE_NONE = 0

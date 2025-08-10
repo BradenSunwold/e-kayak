@@ -15,7 +15,7 @@ motorManager:
   #   - SpeedOne: 40.0
   #   - SpeedTwo: 60.0
   #   - SpeedThree: 90.0
-  maxRpms: 2145 # 2145 corresponds to about 65% duty cycle and 12A current draw
+  maxRpms: 500 # 2145 corresponds to about 65% duty cycle and 12A current draw
   speedSettingToRpmMapInPercent: # Number of elements here has to match numberOfSpeedSettings
     - 0.0
     - 60.0

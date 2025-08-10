@@ -41,7 +41,7 @@ class MotorManager(threading.Thread):
         
         # Variables coming from motor
         self.mFaultCode = 0
-        self.mStatus = StatusType.eStartup
+        self.mStatus = StatusType.eBatteryVoltPercentage
         self.mRfStatus = StatusType.eFaultCleared
         self.mFaultTime = 0
         self.mFaultLatched = False
@@ -187,14 +187,29 @@ class MotorManager(threading.Thread):
                 self.mLogger.info('RF Status: %s', self.mRfStatus)
                 self.mLogger.info('Motor Status: %s', self.mStatus)
                 
-                # Send out battery status
+                # Send out status to oar 
                 if(self.mRfStatus != StatusType.eComsLoss and self.mStatus != StatusType.eComsLoss and self.mStatus != StatusType.eHighCurrent and self.mStatus != StatusType.eLowBattery and self.mStatus != StatusType.eUnknownFault) :
-                    # Only send out battery info if not faulted
-                    self.mStatus = StatusType.eBatteryVolt
-                    data = self.mVoltage
+                    # Only send out battery and speed info if not faulted 
+                    self.mStatus = StatusType.eBatteryVoltPercentage
+                    self.mLogger.info('Sending Battery Status Voltage: %s', self.mVoltage)
                     
-                    self.mLogger.info('Sending Battery Status: %s', self.mVoltage)
-                    payload = struct.pack('hf', self.mStatus, data)
+                    # Normalize battery voltages between 0 - 100% - equation based on voltage curves
+                    kayakBatteryPercentage = (1.0234 * (self.mVoltage * self.mVoltage * self.mVoltage)) - (69.144 * (self.mVoltage * self.mVoltage))  + (1556 * self.mVoltage) - 11654
+                    
+                    if(kayakBatteryPercentage > 100) :
+                        kayakBatteryPercentage = 100
+                    elif(kayakBatteryPercentage < 0) :
+                       kayakBatteryPercentage = 0
+                       
+                    self.mLogger.info('Sending Battery Status Voltage Percentage: %s', kayakBatteryPercentage)
+                    payload = struct.pack('hf', self.mStatus, kayakBatteryPercentage) 
+                    self.mOutgoingQueue.put(payload)
+                    
+                    # Send speed percentage
+                    self.mStatus = StatusType.eSpeedPercentageReport
+                    speedPercentage = (self.mRpmFeedback / self.mMaxRpms) * 100
+                    self.mLogger.info('Sending Speed Percentage: %s', speedPercentage)
+                    payload = struct.pack('hf', self.mStatus, speedPercentage) 
                     self.mOutgoingQueue.put(payload)
                 
                 # Check on any faults - For some reason this is not entering when no faults are present
@@ -214,10 +229,6 @@ class MotorManager(threading.Thread):
                             self.mStatus = StatusType.eFaultCleared       # Send fault cleared then startup commands to init oar fault reset
                             data = 0.0                                    # Pack emtpy data
                             
-                            payload = struct.pack('hf', self.mStatus, data)
-                            self.mOutgoingQueue.put(payload)
-                            
-                            self.mStatus = StatusType.eStartup            
                             payload = struct.pack('hf', self.mStatus, data)
                             self.mOutgoingQueue.put(payload)
                             

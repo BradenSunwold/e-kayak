@@ -80,7 +80,7 @@ class RfManager(threading.Thread):
       status, data = struct.unpack('hf', newCommand)
       
       # Send to oar
-      self.mRadio.payload_size = struct.calcsize('hf') # Payload consists of status type and float value
+      self.mRadio.payload_size = struct.calcsize('hf') # Payload consists of status type and byte value
       self.mRadio.listen = False  # ensures the nRF24L01 is in TX mode
       
       payload = struct.pack('hf', status, data)

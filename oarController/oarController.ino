@@ -57,7 +57,7 @@ typedef enum
 typedef struct 
 {
   StatusType_t fStatusType;
-  uint8_t fStatusData;
+  float fStatusData;
 } KayakFeedbackMsg_t;
 
 typedef struct
@@ -107,7 +107,7 @@ typedef struct
 } RfOutputMsgSecondHalf_t;
 
 // Forward decs
-std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speedPercentage, uint8_t batteryPercentage);
+std::function<void(int, uint32_t*)> GaugeFrameGenerator(float speedPercentage, float batteryPercentage);
 std::function<void(int, uint32_t*)> StartupFrameGenerator(const uint32_t* leftHalfColors, const uint32_t* rightHalfColors);
 
 
@@ -459,8 +459,8 @@ static void ProcessOutputsTask( void *pvParameters )
   bool connectingFlag = false;
 
   bool autoMode = false;
-  uint8_t speedPercentageReported = 0;
-  uint8_t speedPercentageCommanded = 0; 
+  uint16_t speedPercentageReported = 0;
+  uint16_t speedPercentageCommanded = 0; 
 
   KayakFeedbackMsg_t kayakStatusMsg;
   PaddleCmdMsg_t paddleCmdMsg;
@@ -468,8 +468,8 @@ static void ProcessOutputsTask( void *pvParameters )
 
   float kayakBatteryPercentage = 26;
   float oarbatteryVolt = 4.2;
-  uint32_t totalBatteryPercentageReport = 100;
-  uint32_t prevTotalBatteryPercentage = 99;    // Set prev percentage 99 to force an animation update
+  float totalBatteryPercentageReport = 100;
+  float prevTotalBatteryPercentage = 99;    // Set prev percentage 99 to force an animation update
 
   uint32_t downSampleBatteryReadCount = 0;
 
@@ -645,11 +645,11 @@ static void ProcessOutputsTask( void *pvParameters )
 
       if(kayakBatteryPercentage > oarBatteryPercentage)
       {
-        totalBatteryPercentageReport = (uint32_t) oarBatteryPercentage;
+        totalBatteryPercentageReport = oarBatteryPercentage;
       }
       else
       {
-        totalBatteryPercentageReport = (uint32_t) kayakBatteryPercentage;
+        totalBatteryPercentageReport = kayakBatteryPercentage;
       }
     }
 
@@ -1341,7 +1341,7 @@ void CircularFrameGeneratorGreen(int frameIndex, uint32_t* outputColorBuffer)
   }
 }
 
-std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speedPercentage, uint8_t batteryPercentage)
+std::function<void(int, uint32_t*)> GaugeFrameGenerator(float speedPercentage, float batteryPercentage)
 {
   return [=](int frameIndex, uint32_t* ledOutputColorBuffer)
   {
@@ -1351,8 +1351,8 @@ std::function<void(int, uint32_t*)> GaugeFrameGenerator(uint8_t speedPercentage,
     // Calculate # of pixels to turn on
     // int ledMultiplier = round(half / 3.0f);
     // int speedPixelsOn = speed * ledMultiplier;
-    int batteryPixelsOn = round(batteryPercentage / (100.0 / (float)half));
-    int speedPixelsOn = round(speedPercentage / (100.0 / (float)half));
+    int batteryPixelsOn = round((float)batteryPercentage / (100.0 / (float)half));
+    int speedPixelsOn = round((float)speedPercentage / (100.0 / (float)half));
 
     // Set speed LEDs (first half)
     for (int i = half - 1, count = 0; i >= 0; --i, ++count)

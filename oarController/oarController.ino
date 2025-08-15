@@ -382,6 +382,27 @@ static void ButtonInputTask( void *pvParameters )
     buttonInputMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
     buttonInputMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
+    // ===== Non-blocking Serial Mock Input =====
+    if (Serial.available() > 0) {
+      char c = Serial.read(); // Non-blocking read of one character
+
+      if (c == 's') {
+        Serial.println("MOCK: SINGLE");
+        if (currButtonState.fSpeed == 3) {
+          currButtonState.fSpeed = 0;
+        } else {
+          currButtonState.fSpeed++;
+        }
+        xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
+      }
+      else if (c == 'd') {
+        Serial.println("MOCK: DOUBLE");
+        currButtonState.fAutoMode = !currButtonState.fAutoMode;
+        xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
+      }
+    }
+
+    // ===== Physical button read =====
     int reading = digitalRead(BUTTON_PIN);
 
     // If the switch changed, due to noise or pressing:

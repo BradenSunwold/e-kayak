@@ -1175,7 +1175,7 @@ void setup()
   // Set all task call rates
   gReadRfTaskRateInMs = 100; 
   gReadImuTaskRateInMs = 50; 
-  gProcessOutTaskRateInMs = 100; 
+  gProcessOutTaskRateInMs = 50; 
   gButtonInTaskRateInMs = 20; 
   gWriteRfTaskRateInMs = 50; 
   gLedDriverTaskRateInMs = 25; 

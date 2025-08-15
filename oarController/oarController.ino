@@ -1142,7 +1142,7 @@ void setup()
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_MIN);
   radio.setRetries(3, 3);       // Need to test with Rx and Tx running on motor and oar
-  radio.setAutoAck(false);
+  // radio.setAutoAck(false);
 
   // SETUP Button
   pinMode(BUTTON_PIN, INPUT);

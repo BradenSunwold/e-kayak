@@ -297,22 +297,23 @@ static void ReadImuTask( void *pvParameters )
   sh2_SensorValue_t sensorData;   // local variables to cpature reported data
   FullImuDataSet_t fullImuDataSet;
 
+  bool freshDataFlag = false;
+
   while(1)
   {
     readImuMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
     readImuMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
-    // Check for IMU reset
-    if (bno08x.wasReset()) 
-    {
-      Serial.print("sensor was reset ");
-      SetImuReports();
-    }
-
     // Read incoming sensor data
-    if (bno08x.getSensorEvent(&sensorData)) 
+    while(bno08x.getSensorEvent(&sensorData))
     {
-      // in this demo only one report type will be received depending on FAST_MODE define (above)
+      // Check for IMU reset
+      if (bno08x.wasReset()) 
+      {
+        Serial.print("sensor was reset ");
+        SetImuReports();
+      }
+      
       switch (sensorData.sensorId) 
       {
         case SH2_ARVR_STABILIZED_RV :
@@ -337,9 +338,17 @@ static void ReadImuTask( void *pvParameters )
         default : 
           Serial.println("Nothing recieved from IMU");
       }
-      // Push data to queue
+
+      freshDataFlag = true;
+    }
+
+    if(freshDataFlag)
+    {
       xQueueOverwrite(imuDataQueue, (void*)&fullImuDataSet);
     }
+
+    // Reset fresh flag
+    freshDataFlag = false;
 
     readImuMetaData.GetExecutionTimer().Stop();
 
@@ -955,160 +964,160 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     diagTaskMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
     diagTaskMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
-    // // Print average timings
-    // // Print read rf diag
-    // Serial.print("ReadRF average call rate: ");
-    // Serial.print(readRfMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("ReadRF average execution rate: ");
-    // Serial.print(readRfMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("ReadRF stack use: ");
-    // Serial.println(readRfMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
-
-    // // Print read IMU diag
-    // Serial.print("ReadImu average call rate: ");
-    // Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("ReadImu average execution rate: ");
-    // Serial.print(readImuMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("ReadImu stack use: ");
-    // Serial.println(readImuMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
-
-    // // Print output processor diag
-    // Serial.print("outProcessor average call rate: ");
-    // Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("outProcessor average execution rate: ");
-    // Serial.print(processOutputsMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("outProcessor stack use: ");
-    // Serial.println(processOutputsMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
-
-    // // Print button input diag
-    // Serial.print("buttonIn average call rate: ");
-    // Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("buttonIn average execution rate: ");
-    // Serial.print(buttonInputMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("buttonIn stack use: ");
-    // Serial.println(buttonInputMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
-
-    // // Print write RF diag
-    // Serial.print("WriteRf average call rate: ");
-    // Serial.print(writeRfMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("WriteRf average execution rate: ");
-    // Serial.print(writeRfMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("WriteRf stack use: ");
-    // Serial.println(writeRfMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
-
-    // // Print Led driver diag
-    // Serial.print("LedDriver average call rate: ");
-    // Serial.println(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    // Serial.print("LedDriver average execution rate: ");
-    // Serial.println(ledDriverMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    // Serial.print("LedDriver stack use: ");
-    // Serial.println(ledDriverMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
-
-    // // Print task diag dump diag
-    // Serial.print("DiagDump average call rate: ");
-    // Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("DiagDump average execution rate: ");
-    // Serial.print(diagTaskMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("DiagDump stack use: ");
-    // Serial.println(diagTaskMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
-
-    // Serial.println();
-
-
-    // Print out worst case timings
+    // Print average timings
     // Print read rf diag
-    Serial.print("ReadRF max call rate: ");
-    Serial.print(readRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInTicks());
+    Serial.print("ReadRF average call rate: ");
+    Serial.print(readRfMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
-    Serial.print("ReadRF max execution rate: ");
-    Serial.print(readRfMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("ReadRF average execution rate: ");
+    Serial.print(readRfMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
     Serial.print("ReadRF stack use: ");
     Serial.println(readRfMetaData.GetStackUsageHighWaterMark());
     Serial.println();
 
     // Print read IMU diag
-    Serial.print("ReadImu max call rate: ");
-    Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("ReadImu average call rate: ");
+    Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
-    Serial.print("ReadImu max execution rate: ");
-    Serial.print(readImuMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("ReadImu average execution rate: ");
+    Serial.print(readImuMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
     Serial.print("ReadImu stack use: ");
     Serial.println(readImuMetaData.GetStackUsageHighWaterMark());
     Serial.println();
 
     // Print output processor diag
-    Serial.print("outProcessor max call rate: ");
-    Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("outProcessor average call rate: ");
+    Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
-    Serial.print("outProcessor max execution rate: ");
-    Serial.print(processOutputsMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("outProcessor average execution rate: ");
+    Serial.print(processOutputsMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
     Serial.print("outProcessor stack use: ");
     Serial.println(processOutputsMetaData.GetStackUsageHighWaterMark());
     Serial.println();
 
     // Print button input diag
-    Serial.print("buttonIn max call rate: ");
-    Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("buttonIn average call rate: ");
+    Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
-    Serial.print("buttonIn max execution rate: ");
-    Serial.print(buttonInputMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("buttonIn average execution rate: ");
+    Serial.print(buttonInputMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
     Serial.print("buttonIn stack use: ");
     Serial.println(buttonInputMetaData.GetStackUsageHighWaterMark());
     Serial.println();
 
     // Print write RF diag
-    Serial.print("WriteRf max call rate: ");
-    Serial.print(writeRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("WriteRf average call rate: ");
+    Serial.print(writeRfMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
-    Serial.print("WriteRf max execution rate: ");
-    Serial.print(writeRfMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("WriteRf average execution rate: ");
+    Serial.print(writeRfMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
     Serial.print("WriteRf stack use: ");
     Serial.println(writeRfMetaData.GetStackUsageHighWaterMark());
     Serial.println();
 
     // Print Led driver diag
-    Serial.print("LedDriver max call rate: ");
-    Serial.println(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
-    Serial.print("LedDriver max execution rate: ");
-    Serial.println(ledDriverMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("LedDriver average call rate: ");
+    Serial.println(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    Serial.print("LedDriver average execution rate: ");
+    Serial.println(ledDriverMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.print("LedDriver stack use: ");
     Serial.println(ledDriverMetaData.GetStackUsageHighWaterMark());
     Serial.println();
 
     // Print task diag dump diag
-    Serial.print("DiagDump max call rate: ");
-    Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    Serial.print("DiagDump average call rate: ");
+    Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
-    Serial.print("DiagDump max execution rate: ");
-    Serial.print(diagTaskMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    Serial.print("DiagDump average execution rate: ");
+    Serial.print(diagTaskMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
     Serial.print("DiagDump stack use: ");
     Serial.println(diagTaskMetaData.GetStackUsageHighWaterMark());
     Serial.println();
+
+    // Serial.println();
+
+
+    // // Print out worst case timings
+    // // Print read rf diag
+    // Serial.print("ReadRF max call rate: ");
+    // Serial.print(readRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInTicks());
+    // Serial.println("ms");
+    // Serial.print("ReadRF max execution rate: ");
+    // Serial.print(readRfMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("ReadRF stack use: ");
+    // Serial.println(readRfMetaData.GetStackUsageHighWaterMark());
+    // Serial.println();
+
+    // // Print read IMU diag
+    // Serial.print("ReadImu max call rate: ");
+    // Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("ReadImu max execution rate: ");
+    // Serial.print(readImuMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("ReadImu stack use: ");
+    // Serial.println(readImuMetaData.GetStackUsageHighWaterMark());
+    // Serial.println();
+
+    // // Print output processor diag
+    // Serial.print("outProcessor max call rate: ");
+    // Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("outProcessor max execution rate: ");
+    // Serial.print(processOutputsMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("outProcessor stack use: ");
+    // Serial.println(processOutputsMetaData.GetStackUsageHighWaterMark());
+    // Serial.println();
+
+    // // Print button input diag
+    // Serial.print("buttonIn max call rate: ");
+    // Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("buttonIn max execution rate: ");
+    // Serial.print(buttonInputMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("buttonIn stack use: ");
+    // Serial.println(buttonInputMetaData.GetStackUsageHighWaterMark());
+    // Serial.println();
+
+    // // Print write RF diag
+    // Serial.print("WriteRf max call rate: ");
+    // Serial.print(writeRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("WriteRf max execution rate: ");
+    // Serial.print(writeRfMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("WriteRf stack use: ");
+    // Serial.println(writeRfMetaData.GetStackUsageHighWaterMark());
+    // Serial.println();
+
+    // // Print Led driver diag
+    // Serial.print("LedDriver max call rate: ");
+    // Serial.println(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // Serial.print("LedDriver max execution rate: ");
+    // Serial.println(ledDriverMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // Serial.print("LedDriver stack use: ");
+    // Serial.println(ledDriverMetaData.GetStackUsageHighWaterMark());
+    // Serial.println();
+
+    // // Print task diag dump diag
+    // Serial.print("DiagDump max call rate: ");
+    // Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("DiagDump max execution rate: ");
+    // Serial.print(diagTaskMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // Serial.println("ms");
+    // Serial.print("DiagDump stack use: ");
+    // Serial.println(diagTaskMetaData.GetStackUsageHighWaterMark());
+    // Serial.println();
 
     Serial.println();
 
@@ -1141,13 +1150,14 @@ void setup()
   radio.openReadingPipe(1, address[1]);
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_MIN);
-  radio.setRetries(3, 3);       // Need to test with Rx and Tx running on motor and oar
+  radio.setRetries(3, 2);       // Need to test with Rx and Tx running on motor and oar
   // radio.setAutoAck(false);
 
   // SETUP Button
   pinMode(BUTTON_PIN, INPUT);
 
   // SETUP BNO
+  Wire.setClock(400000);
   if (!bno08x.begin_I2C()) 
   {
     Serial.println("Failed to find BNO08x chip");
@@ -1174,7 +1184,7 @@ void setup()
 
   // Set all task call rates
   gReadRfTaskRateInMs = 100; 
-  gReadImuTaskRateInMs = 50; 
+  gReadImuTaskRateInMs = 20; 
   gProcessOutTaskRateInMs = 50; 
   gButtonInTaskRateInMs = 20; 
   gWriteRfTaskRateInMs = 50; 
@@ -1184,10 +1194,10 @@ void setup()
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
   xTaskCreate(ReadRfTask, "Read RF", 120, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
-  xTaskCreate(ReadImuTask, "Read IMU", 210, NULL, tskIDLE_PRIORITY + 7, &Handle_ReadImuTask);                              // 736 bytes
-  xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 8, &Handle_ButtonInputTask);                    // 336 bytes
+  xTaskCreate(ReadImuTask, "Read IMU", 210, NULL, tskIDLE_PRIORITY + 10, &Handle_ReadImuTask);                              // 736 bytes
+  xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 10, &Handle_ButtonInputTask);                    // 336 bytes
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 130, NULL, tskIDLE_PRIORITY + 4, &Handle_ProcessOutputsTask);        // 936 bytes
-  xTaskCreate(RfOutputTask, "RF Out", 140, NULL, tskIDLE_PRIORITY + 7, &Handle_RfOutputTask);                             // 432 bytes
+  xTaskCreate(RfOutputTask, "RF Out", 140, NULL, tskIDLE_PRIORITY + 10, &Handle_RfOutputTask);                             // 432 bytes
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks

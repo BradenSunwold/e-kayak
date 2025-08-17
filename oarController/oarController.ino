@@ -169,11 +169,10 @@ static QueueHandle_t rfOutMsgQueue;
 static QueueHandle_t ledPixelMapQueue;
 
 // Input tasks
-TaskHandle_t Handle_ReadRfTask;
 TaskHandle_t Handle_ReadImuTask;
 TaskHandle_t Handle_ProcessOutputsTask;
 TaskHandle_t Handle_ButtonInputTask;
-TaskHandle_t Handle_RfOutputTask;
+TaskHandle_t Handle_RfRadioTask;
 TaskHandle_t Handle_LedPixelUpdaterTask;
 
 // Test tasks
@@ -181,11 +180,10 @@ TaskHandle_t Handle_DumpTaskMetaData;
 TaskHandle_t Handle_LedPixelUpdaterTester;
 
 // Global variables for setting task rates
-int gReadRfTaskRateInMs = 0xFFFFFFFF; 
 int gReadImuTaskRateInMs = 0xFFFFFFFF; 
 int gProcessOutTaskRateInMs = 0xFFFFFFFF; 
 int gButtonInTaskRateInMs = 0xFFFFFFFF; 
-int gWriteRfTaskRateInMs = 0xFFFFFFFF; 
+int gRfRadioTaskRateInMs = 0xFFFFFFFF; 
 int gLedDriverTaskRateInMs = 0xFFFFFFFF; 
 
 // Test task rates
@@ -193,11 +191,10 @@ int gLedTesterTaskRateInMs = 0xFFFFFFFF;
 int gDiagDumpTaskRateInMs = 0xFFFFFFFF; 
 
 // Global vars for tracking task meta data
-TaskMetaData readRfMetaData(Handle_ReadRfTask);
-TaskMetaData readImuMetaData(Handle_ReadRfTask);
+TaskMetaData readImuMetaData(Handle_ReadImuTask);
 TaskMetaData processOutputsMetaData(Handle_ProcessOutputsTask);
 TaskMetaData buttonInputMetaData(Handle_ButtonInputTask);
-TaskMetaData writeRfMetaData(Handle_RfOutputTask);
+TaskMetaData rfRadioMetaData(Handle_RfRadioTask);
 TaskMetaData ledDriverMetaData(Handle_LedPixelUpdaterTask);
 
 // test tasks 
@@ -223,75 +220,6 @@ void myDelayMsUntil(TickType_t *previousWakeTime, int ms)
   vTaskDelayUntil( previousWakeTime, (ms * 1000) / portTICK_PERIOD_US );  
 }
 
-
-// RF input task
-static void ReadRfTask( void *pvParameters ) 
-{
-  // Struct to locally store incoming RF data
-  KayakFeedbackMsg_t incomingData;
-
-  // Vars to track coms timeout to motor
-  volatile TickType_t lastReceivedMsgTimeInTicks = xTaskGetTickCount();
-  double comsDroppedTimeInMs = 3000.0;     // If lose signal for 3 seconds, signal re connecting annimation
-  bool firstMessageReceived = false;
-
-  radioSemaphore = xSemaphoreCreateMutex();     // Create mutex
-  
-  while(1)
-  {
-    readRfMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
-    readRfMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
-
-    if( radioSemaphore != NULL )
-    {
-      /* See if we can obtain the semaphore.  If the semaphore is not
-      available wait 5 ticks to see if it becomes free. */
-      if( xSemaphoreTake( radioSemaphore, ( TickType_t ) 5 ) == pdTRUE )
-      {
-        // radio.setPayloadSize(sizeof(incomingData)); 
-        if (radio.available()) 
-        {
-          uint8_t readLength = radio.getDynamicPayloadSize();
-          // Store incoming data to local buffer
-          radio.read(&incomingData, readLength);
-
-          // Update coms watchdog
-          lastReceivedMsgTimeInTicks = xTaskGetTickCount();
-          firstMessageReceived = true;
-
-          // Store relevant data to queue for output processing
-          xQueueSend(kayakStatusQueue, (void *)&incomingData, 1);
-        }
-
-          xSemaphoreGive( radioSemaphore );
-      }
-      else
-      {
-          Serial.println("Could not take mutex");
-      }
-    }
-
-    // Check on coms watchdog
-    if(((static_cast<double>(xTaskGetTickCount()) / static_cast<double>(portTICK_PERIOD_MS)) - 
-                       (static_cast<double>(lastReceivedMsgTimeInTicks) / static_cast<double>(portTICK_PERIOD_MS))) > comsDroppedTimeInMs || !firstMessageReceived)
-    {
-      // Trigger coms fault - set global flag
-      gComsTimeoutFlag = true;
-    }
-    else
-    {
-      // Clear flag
-      gComsTimeoutFlag = false;
-    }
-
-    readRfMetaData.GetExecutionTimer().Stop();
-
-    myDelayMs(gReadRfTaskRateInMs);    // execute task at 20Hz
-  }
-
-  Serial.println("Task Monitor: Deleting");
-  vTaskDelete( NULL );
-}
 
 static void ReadImuTask( void *pvParameters ) 
 {
@@ -890,7 +818,7 @@ static void LedPixelUpdaterTester( void *pvParameters )
   vTaskDelete( NULL );
 }
 
-static void RfOutputTask( void *pvParameters )
+static void RfRadioTask( void *pvParameters )
 {
   PaddleCmdMsg_t PaddleCmdOut;
 
@@ -920,58 +848,95 @@ static void RfOutputTask( void *pvParameters )
   outputMsgSecondHalf.fMessageIndex_2 = 2;
   outputMsgSecondHalf.fOutputImuAddReports = imuDataOut.fAddReportsVect;
 
+  bool newTxData = false;
+
+  // Struct to locally store incoming RF data
+  KayakFeedbackMsg_t incomingData;
+
+  // Vars to track coms timeout to motor
+  volatile TickType_t lastReceivedMsgTimeInTicks = xTaskGetTickCount();
+  double comsDroppedTimeInMs = 3000.0;     // If lose signal for 3 seconds, signal re connecting annimation
+  bool firstMessageReceived = false;
+
+  uint8_t rxDownSample = 2;   // Only try to read radio every x iterations
+  uint8_t rxDownSampleCounter = 0;
 
   while(1)
   {
-    writeRfMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
-    writeRfMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+    // rfRadioMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+    // rfRadioMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
+    /************************************** TX *****************************************/
     // Read in IMU / state data
     if (xQueueReceive(imuDataQueue, (void *)&imuDataOut, 0) == pdTRUE)
     {
+      rfRadioMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+
       // Package IMU data into RF output struct
       memcpy(&outputMsgFirstHalf.fOutputImuEuler, &imuDataOut.fEulerData, sizeof(imuDataOut.fEulerData));
       memcpy(&outputMsgSecondHalf.fOutputImuAddReports, &imuDataOut.fAddReportsVect, sizeof(imuDataOut.fAddReportsVect));
+      newTxData = true;
     }
     if(xQueueReceive(rfOutMsgQueue, (void *)&PaddleCmdOut, 0) == pdTRUE)
     {
       // Package state into RF output struct
       memcpy(&outputMsgFirstHalf.fOutputCmd, &PaddleCmdOut, sizeof(PaddleCmdOut));
+      newTxData = true;
       // Serial.println(outputMsgFirstHalf.fOutputState.fAutoMode);
       // Serial.println(outputMsgFirstHalf.fOutputState.fSpeed);
     }
 
-    if( radioSemaphore != NULL )
+    if(newTxData)
     {
-      if( xSemaphoreTake( radioSemaphore, ( TickType_t ) 5 ) == pdTRUE )
+      rfRadioMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+      // New data is available to send
+      radio.stopListening();    // put radio in TX mode
+
+      // Send RF data out
+      bool report = radio.write(&outputMsgFirstHalf, sizeof(outputMsgFirstHalf));  // transmit & save the report
+      report = radio.write(&outputMsgSecondHalf, sizeof(outputMsgSecondHalf));  // transmit & save the report
+
+      newTxData = false;    // Reset fresh data flag
+      rfRadioMetaData.GetExecutionTimer().Stop(); 
+    }
+
+    /************************************** RX *****************************************/
+    // Rx data twice as slow as outgoing data - down sample for Rx messages
+    if(rxDownSampleCounter >= rxDownSample - 1)
+    {
+      radio.startListening();    // put radio in RX mode
+      if (radio.available()) 
       {
-        // radio.setPayloadSize(sizeof(outputMsg)); 
-        // radio.setPayloadSize(sizeof(outputMsgFirstHalf)); 
-        radio.stopListening();    // put radio in TX mode
+        uint8_t readLength = radio.getDynamicPayloadSize();
+        // Store incoming data to local buffer
+        radio.read(&incomingData, readLength);
 
-        // Send RF data out
-        unsigned long start_timer = millis();                // start the timer
-        bool report = radio.write(&outputMsgFirstHalf, sizeof(outputMsgFirstHalf));  // transmit & save the report
+        // Update coms watchdog
+        lastReceivedMsgTimeInTicks = xTaskGetTickCount();
+        firstMessageReceived = true;
 
-        // radio.setPayloadSize(sizeof(outputMsgSecondHalf));
-        report = radio.write(&outputMsgSecondHalf, sizeof(outputMsgSecondHalf));  // transmit & save the report
-        unsigned long end_timer = millis();                  // end the timer
-
-        // Serial.println(end_timer - start_timer);
-
-        radio.startListening();  // put radio back in Rx mode
-
-        xSemaphoreGive( radioSemaphore );
+        // Store relevant data to queue for output processing
+        xQueueSend(kayakStatusQueue, (void *)&incomingData, 1);
       }
+    }
+
+        // Check on coms watchdog
+    if(((static_cast<double>(xTaskGetTickCount()) / static_cast<double>(portTICK_PERIOD_MS)) - 
+                      (static_cast<double>(lastReceivedMsgTimeInTicks) / static_cast<double>(portTICK_PERIOD_MS))) > comsDroppedTimeInMs || !firstMessageReceived)
+    {
+      // Trigger coms fault - set global flag
+      gComsTimeoutFlag = true;
     }
     else
     {
-      // Serial.println("Could not take mutex");
+      // Clear flag
+      gComsTimeoutFlag = false;
     }
     
-    writeRfMetaData.GetExecutionTimer().Stop(); 
+    rxDownSampleCounter++;
+    // rfRadioMetaData.GetExecutionTimer().Stop(); 
 
-    myDelayMs(gWriteRfTaskRateInMs);   // execute task at 20Hz
+    myDelayMs(gRfRadioTaskRateInMs);   // execute task at 20Hz
 
   }
 
@@ -988,16 +953,6 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     diagTaskMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
     // Print average timings
-    // Print read rf diag
-    Serial.print("ReadRF average call rate: ");
-    Serial.print(readRfMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("ReadRF average execution rate: ");
-    Serial.print(readRfMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("ReadRF stack use: ");
-    Serial.println(readRfMetaData.GetStackUsageHighWaterMark());
-    Serial.println();
 
     // Print read IMU diag
     Serial.print("ReadImu average call rate: ");
@@ -1033,14 +988,14 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     Serial.println();
 
     // Print write RF diag
-    Serial.print("WriteRf average call rate: ");
-    Serial.print(writeRfMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    Serial.print("Rf average call rate: ");
+    Serial.print(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
-    Serial.print("WriteRf average execution rate: ");
-    Serial.print(writeRfMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    Serial.print("Rf average execution rate: ");
+    Serial.print(rfRadioMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
-    Serial.print("WriteRf stack use: ");
-    Serial.println(writeRfMetaData.GetStackUsageHighWaterMark());
+    Serial.print("Rf stack use: ");
+    Serial.println(rfRadioMetaData.GetStackUsageHighWaterMark());
     Serial.println();
 
     // Print Led driver diag
@@ -1066,17 +1021,7 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     // Serial.println();
 
 
-    // // Print out worst case timings
-    // // Print read rf diag
-    // Serial.print("ReadRF max call rate: ");
-    // Serial.print(readRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInTicks());
-    // Serial.println("ms");
-    // Serial.print("ReadRF max execution rate: ");
-    // Serial.print(readRfMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("ReadRF stack use: ");
-    // Serial.println(readRfMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
+    // // Print out worst case timing
 
     // // Print read IMU diag
     // Serial.print("ReadImu max call rate: ");
@@ -1112,14 +1057,14 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     // Serial.println();
 
     // // Print write RF diag
-    // Serial.print("WriteRf max call rate: ");
-    // Serial.print(writeRfMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // Serial.print("Rf max call rate: ");
+    // Serial.print(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
     // Serial.println("ms");
-    // Serial.print("WriteRf max execution rate: ");
-    // Serial.print(writeRfMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // Serial.print("Rf max execution rate: ");
+    // Serial.print(rfRadioMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
     // Serial.println("ms");
-    // Serial.print("WriteRf stack use: ");
-    // Serial.println(writeRfMetaData.GetStackUsageHighWaterMark());
+    // Serial.print("Rf stack use: ");
+    // Serial.println(rfRadioMetaData.GetStackUsageHighWaterMark());
     // Serial.println();
 
     // // Print Led driver diag
@@ -1174,10 +1119,10 @@ void setup()
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_LOW);
   radio.setDataRate(RF24_1MBPS);      // default - RF24_1MBPS
-  // radio.setRetries(0, 0);             // Need to test with Rx and Tx running on motor and oar
+  radio.setRetries(3, 2);             // Need to test with Rx and Tx running on motor and oar
   radio.enableDynamicPayloads();
-  radio.setChannel(90);
-  radio.setAutoAck(false);
+  // radio.setChannel(90);
+  // radio.setAutoAck(false);
 
   // SETUP Button
   pinMode(BUTTON_PIN, INPUT);
@@ -1209,21 +1154,19 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Set all task call rates
-  gReadRfTaskRateInMs = 50; 
   gReadImuTaskRateInMs = 20; 
   gProcessOutTaskRateInMs = 50; 
   gButtonInTaskRateInMs = 20; 
-  gWriteRfTaskRateInMs = 50; 
+  gRfRadioTaskRateInMs = 10; 
   gLedDriverTaskRateInMs = 25; 
   gLedTesterTaskRateInMs = 50; 
   gDiagDumpTaskRateInMs = 5000; 
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
-  xTaskCreate(ReadRfTask, "Read RF", 120, NULL, tskIDLE_PRIORITY + 11, &Handle_ReadRfTask);                                 // 352 bytes RAM
   xTaskCreate(ReadImuTask, "Read IMU", 210, NULL, tskIDLE_PRIORITY + 10, &Handle_ReadImuTask);                              // 736 bytes
   xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 10, &Handle_ButtonInputTask);                    // 336 bytes
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_ProcessOutputsTask);        // 936 bytes
-  xTaskCreate(RfOutputTask, "RF Out", 140, NULL, tskIDLE_PRIORITY + 10, &Handle_RfOutputTask);                             // 432 bytes
+  xTaskCreate(RfRadioTask, "RF Out", 160, NULL, tskIDLE_PRIORITY + 11, &Handle_RfRadioTask);                             // 432 bytes
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks

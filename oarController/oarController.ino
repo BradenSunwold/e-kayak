@@ -115,7 +115,7 @@ std::function<void(int, uint32_t*)> StartupFrameGenerator(const uint32_t* leftHa
 //######################** Support functions ****************************//
 void SetImuReports()
 {
-  long reportIntervalUs = 50000;
+  long reportIntervalUs = 39000;    // Setting to 39 creates average output rate of 50Hz when sampling all three reports at ~66Hz for some reason
 
   Serial.println("Setting desired reports");
   if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, reportIntervalUs)) 
@@ -226,7 +226,10 @@ static void ReadImuTask( void *pvParameters )
   sh2_SensorValue_t sensorData;   // local variables to cpature reported data
   FullImuDataSet_t fullImuDataSet;
 
-  bool freshDataFlag = false;
+  // Flags to track if we have a full set of reports to send out yet
+  bool fusedDataFreshFlag = false;
+  bool accelDataFreshFlag = false;
+  bool gyroDataFreshFlag = false;  
 
   while(1)
   {
@@ -247,6 +250,8 @@ static void ReadImuTask( void *pvParameters )
       {
         case SH2_ARVR_STABILIZED_RV :
           quaternionToEulerRV(&sensorData.un.arvrStabilizedRV, &fullImuDataSet.fEulerData, true);
+          fusedDataFreshFlag = true;
+
           // Serial.print("Pitch: ");
           // Serial.println(fullImuDataSet.fEulerData.fPitch);
           // Serial.println("Roll: ");
@@ -258,26 +263,28 @@ static void ReadImuTask( void *pvParameters )
           fullImuDataSet.fAddReportsVect.fX.fAccel = sensorData.un.accelerometer.x;
           fullImuDataSet.fAddReportsVect.fY.fAccel = sensorData.un.accelerometer.y;
           fullImuDataSet.fAddReportsVect.fZ.fAccel = sensorData.un.accelerometer.z;
+          accelDataFreshFlag = true;
           break;
         case SH2_GYROSCOPE_CALIBRATED :
           fullImuDataSet.fAddReportsVect.fX.fGyro = sensorData.un.gyroscope.x;
           fullImuDataSet.fAddReportsVect.fY.fGyro = sensorData.un.gyroscope.y;
           fullImuDataSet.fAddReportsVect.fZ.fGyro = sensorData.un.gyroscope.z;
+          gyroDataFreshFlag = true;
           break;
         default : 
           Serial.println("Nothing recieved from IMU");
       }
-
-      freshDataFlag = true;
     }
 
-    if(freshDataFlag)
+    if(fusedDataFreshFlag && accelDataFreshFlag && gyroDataFreshFlag)
     {
       xQueueOverwrite(imuDataQueue, (void*)&fullImuDataSet);
-    }
 
-    // Reset fresh flag
-    freshDataFlag = false;
+      // Reset flags
+      fusedDataFreshFlag = false;
+      accelDataFreshFlag = false;
+      gyroDataFreshFlag = false;
+    }
 
     readImuMetaData.GetExecutionTimer().Stop();
 
@@ -896,7 +903,9 @@ static void RfRadioTask( void *pvParameters )
       bool report = radio.write(&outputMsgFirstHalf, sizeof(outputMsgFirstHalf));  // transmit & save the report
       report = radio.write(&outputMsgSecondHalf, sizeof(outputMsgSecondHalf));  // transmit & save the report
 
+      radio.startListening();    // put radio in RX mode
       newTxData = false;    // Reset fresh data flag
+
       rfRadioMetaData.GetExecutionTimer().Stop(); 
     }
 
@@ -904,7 +913,6 @@ static void RfRadioTask( void *pvParameters )
     // Rx data twice as slow as outgoing data - down sample for Rx messages
     if(rxDownSampleCounter >= rxDownSample - 1)
     {
-      radio.startListening();    // put radio in RX mode
       if (radio.available()) 
       {
         uint8_t readLength = radio.getDynamicPayloadSize();
@@ -958,6 +966,9 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     Serial.print("ReadImu average call rate: ");
     Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
+    Serial.print("ReadImu std dev: ");
+    Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    Serial.println("ms");
     Serial.print("ReadImu average execution rate: ");
     Serial.print(readImuMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
@@ -968,6 +979,9 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     // Print output processor diag
     Serial.print("outProcessor average call rate: ");
     Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    Serial.println("ms");
+    Serial.print("outProcessor std dev: ");
+    Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
     Serial.println("ms");
     Serial.print("outProcessor average execution rate: ");
     Serial.print(processOutputsMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
@@ -980,6 +994,9 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     Serial.print("buttonIn average call rate: ");
     Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
+    Serial.print("buttonIn std dev: ");
+    Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    Serial.println("ms");
     Serial.print("buttonIn average execution rate: ");
     Serial.print(buttonInputMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
@@ -991,6 +1008,9 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     Serial.print("Rf average call rate: ");
     Serial.print(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
     Serial.println("ms");
+    Serial.print("Rf std dev: ");
+    Serial.print(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    Serial.println("ms");
     Serial.print("Rf average execution rate: ");
     Serial.print(rfRadioMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
     Serial.println("ms");
@@ -1000,9 +1020,14 @@ static void DumpTaskMetaDataTask( void *pvParameters )
 
     // Print Led driver diag
     Serial.print("LedDriver average call rate: ");
-    Serial.println(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    Serial.print(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    Serial.println("ms");
+    Serial.print("LedDriver std dev: ");
+    Serial.print(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    Serial.println("ms");
     Serial.print("LedDriver average execution rate: ");
-    Serial.println(ledDriverMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    Serial.print(ledDriverMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    Serial.println("ms");
     Serial.print("LedDriver stack use: ");
     Serial.println(ledDriverMetaData.GetStackUsageHighWaterMark());
     Serial.println();
@@ -1010,6 +1035,9 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     // Print task diag dump diag
     Serial.print("DiagDump average call rate: ");
     Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    Serial.println("ms");
+    Serial.print("DiagDump std dev: ");
+    Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
     Serial.println("ms");
     Serial.print("DiagDump average execution rate: ");
     Serial.print(diagTaskMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
@@ -1154,20 +1182,20 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Set all task call rates
-  gReadImuTaskRateInMs = 20; 
+  gReadImuTaskRateInMs = 10; 
   gProcessOutTaskRateInMs = 50; 
   gButtonInTaskRateInMs = 20; 
-  gRfRadioTaskRateInMs = 10; 
+  gRfRadioTaskRateInMs = 20; 
   gLedDriverTaskRateInMs = 25; 
   gLedTesterTaskRateInMs = 50; 
   gDiagDumpTaskRateInMs = 5000; 
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
-  xTaskCreate(ReadImuTask, "Read IMU", 210, NULL, tskIDLE_PRIORITY + 10, &Handle_ReadImuTask);                              // 736 bytes
-  xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 10, &Handle_ButtonInputTask);                    // 336 bytes
+  xTaskCreate(ReadImuTask, "Read IMU", 210, NULL, tskIDLE_PRIORITY + 11, &Handle_ReadImuTask);                              // 736 bytes
+  xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 9, &Handle_ButtonInputTask);                    // 336 bytes
   xTaskCreate(ProcessOutputsTask, "Process Outputs", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_ProcessOutputsTask);        // 936 bytes
-  xTaskCreate(RfRadioTask, "RF Out", 160, NULL, tskIDLE_PRIORITY + 11, &Handle_RfRadioTask);                             // 432 bytes
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_LedPixelUpdaterTask);        // 928 bytes
+  xTaskCreate(RfRadioTask, "RF Out", 160, NULL, tskIDLE_PRIORITY + 10, &Handle_RfRadioTask);                             // 432 bytes
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 8, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
   xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 100, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);

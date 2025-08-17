@@ -248,11 +248,12 @@ static void ReadRfTask( void *pvParameters )
       available wait 5 ticks to see if it becomes free. */
       if( xSemaphoreTake( radioSemaphore, ( TickType_t ) 5 ) == pdTRUE )
       {
-        radio.setPayloadSize(sizeof(incomingData)); 
+        // radio.setPayloadSize(sizeof(incomingData)); 
         if (radio.available()) 
         {
+          uint8_t readLength = radio.getDynamicPayloadSize();
           // Store incoming data to local buffer
-          radio.read(&incomingData, sizeof(incomingData));
+          radio.read(&incomingData, readLength);
 
           // Update coms watchdog
           lastReceivedMsgTimeInTicks = xTaskGetTickCount();
@@ -266,7 +267,7 @@ static void ReadRfTask( void *pvParameters )
       }
       else
       {
-          // Serial.println("Could not take mutex");
+          Serial.println("Could not take mutex");
       }
     }
 
@@ -541,6 +542,7 @@ static void ProcessOutputsTask( void *pvParameters )
         .fNumCyclesBlock = 1,
         .fNumFrames = LED_COUNT
       };
+      Serial.println("Comms Loss");
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
     }
     else
@@ -944,14 +946,14 @@ static void RfOutputTask( void *pvParameters )
       if( xSemaphoreTake( radioSemaphore, ( TickType_t ) 5 ) == pdTRUE )
       {
         // radio.setPayloadSize(sizeof(outputMsg)); 
-        radio.setPayloadSize(sizeof(outputMsgFirstHalf)); 
+        // radio.setPayloadSize(sizeof(outputMsgFirstHalf)); 
         radio.stopListening();    // put radio in TX mode
 
         // Send RF data out
         unsigned long start_timer = millis();                // start the timer
         bool report = radio.write(&outputMsgFirstHalf, sizeof(outputMsgFirstHalf));  // transmit & save the report
 
-        radio.setPayloadSize(sizeof(outputMsgSecondHalf));
+        // radio.setPayloadSize(sizeof(outputMsgSecondHalf));
         report = radio.write(&outputMsgSecondHalf, sizeof(outputMsgSecondHalf));  // transmit & save the report
         unsigned long end_timer = millis();                  // end the timer
 
@@ -1170,9 +1172,12 @@ void setup()
   radio.begin();
   radio.openReadingPipe(1, address[1]);
   radio.openWritingPipe(address[0]); 
-  radio.setPALevel(RF24_PA_MIN);
-  radio.setRetries(3, 2);       // Need to test with Rx and Tx running on motor and oar
-  // radio.setAutoAck(false);
+  radio.setPALevel(RF24_PA_LOW);
+  radio.setDataRate(RF24_1MBPS);      // default - RF24_1MBPS
+  // radio.setRetries(0, 0);             // Need to test with Rx and Tx running on motor and oar
+  radio.enableDynamicPayloads();
+  radio.setChannel(90);
+  radio.setAutoAck(false);
 
   // SETUP Button
   pinMode(BUTTON_PIN, INPUT);
@@ -1204,7 +1209,7 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Set all task call rates
-  gReadRfTaskRateInMs = 100; 
+  gReadRfTaskRateInMs = 50; 
   gReadImuTaskRateInMs = 20; 
   gProcessOutTaskRateInMs = 50; 
   gButtonInTaskRateInMs = 20; 
@@ -1214,10 +1219,10 @@ void setup()
   gDiagDumpTaskRateInMs = 5000; 
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
-  xTaskCreate(ReadRfTask, "Read RF", 120, NULL, tskIDLE_PRIORITY + 5, &Handle_ReadRfTask);                                 // 352 bytes RAM
+  xTaskCreate(ReadRfTask, "Read RF", 120, NULL, tskIDLE_PRIORITY + 11, &Handle_ReadRfTask);                                 // 352 bytes RAM
   xTaskCreate(ReadImuTask, "Read IMU", 210, NULL, tskIDLE_PRIORITY + 10, &Handle_ReadImuTask);                              // 736 bytes
   xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 10, &Handle_ButtonInputTask);                    // 336 bytes
-  xTaskCreate(ProcessOutputsTask, "Process Outputs", 130, NULL, tskIDLE_PRIORITY + 4, &Handle_ProcessOutputsTask);        // 936 bytes
+  xTaskCreate(ProcessOutputsTask, "Process Outputs", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_ProcessOutputsTask);        // 936 bytes
   xTaskCreate(RfOutputTask, "RF Out", 140, NULL, tskIDLE_PRIORITY + 10, &Handle_RfOutputTask);                             // 432 bytes
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_LedPixelUpdaterTask);        // 928 bytes
 

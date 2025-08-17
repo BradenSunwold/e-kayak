@@ -3,7 +3,7 @@ import sys
 import argparse
 import time
 import struct
-from pyrf24 import RF24, RF24_PA_LOW
+from pyrf24 import RF24, RF24_PA_LOW,  RF24_250KBPS, RF24_1MBPS, RF24_2MBPS
 import sched
 import yaml
 import logging
@@ -33,6 +33,7 @@ class RfManager(threading.Thread):
     self.mCurrentMotorSpeed = 0
 
     self.mPrevReadTimeStamp = time.time()
+    self.mPrevWriteTimeStamp = time.time()
     self.mDataRate = 0
 
     # IMU member vars
@@ -69,6 +70,10 @@ class RfManager(threading.Thread):
     self.mRadio.set_pa_level(RF24_PA_LOW)  # RF24_PA_LOW tested in box at 15 feet
     self.mRadio.open_tx_pipe(self.mAddress[self.mRadioNumber])  
     self.mRadio.open_rx_pipe(1, self.mAddress[not self.mRadioNumber])  
+    self.mRadio.setRetries(3, 2)
+    self.mRadio.setDataRate(RF24_1MBPS)  # Set data rate to 2Mbps for faster data transfer
+    self.mRadio.dynamic_payloads = True
+    # self.mRadio.setChannel(90) # Set channel to 90 for less interference
     # self.mRadio.set_auto_ack(False)
 
   def RfSend(self):
@@ -81,14 +86,21 @@ class RfManager(threading.Thread):
       status, data = struct.unpack('hf', newCommand)
       
       # Send to oar
-      self.mRadio.payload_size = struct.calcsize('hf') # Payload consists of status type and byte value
+      # self.mRadio.payload_size = struct.calcsize('hf') # Payload consists of status type and byte value
+      txLength = struct.calcsize('hf')
       self.mRadio.listen = False  # ensures the nRF24L01 is in TX mode
       
       payload = struct.pack('hf', status, data)
       self.mLogger.info('RF sending status: %s', status)
       self.mLogger.info('RF sending data: %s', data)
       
+      self.mLogger.info('Tx message timing: %.4f', time.time() - self.mPrevWriteTimeStamp)
+      self.mPrevWriteTimeStamp = time.time()     # Capture previous data read timestamp in order to detect data rate issues
+            
       result = self.mRadio.write(payload)
+      
+      if( not result):
+        self.mLogger.error("RF transmission failed or timed out")
       
     except :
       print("Queue is empty after timeout. No new motor status")
@@ -97,7 +109,7 @@ class RfManager(threading.Thread):
 
   def RfReceive(self):
     print("Reading")
-    self.mRadio.payload_size = 28   # standard incoming data will be 28 bytes
+    # self.mRadio.payload_size = 28   # standard incoming data will be 28 bytes
     self.mRadio.listen = True 
    
     
@@ -108,7 +120,7 @@ class RfManager(threading.Thread):
     has_payload, pipe_number = self.mRadio.available_pipe()
     
     if has_payload :
-        length = self.mRadio.payload_size  # grab the payload length
+        length = self.mRadio.getDynamicPayloadSize()  # grab the payload length
         #print(length)
         # fetch 1 payload from RX FIFO
         received = self.mRadio.read(length)  # also clears radio.irq_dr status flag
@@ -130,7 +142,7 @@ class RfManager(threading.Thread):
             self.mLogger.info('Yaw: %.4f', self.mCurrentYaw)
 
             self.mDataRate = 1 / (time.time() - self.mPrevReadTimeStamp) 
-            self.mLogger.info('message timing: %.4f', time.time() - self.mPrevReadTimeStamp)
+            self.mLogger.info('Rx message timing: %.4f', time.time() - self.mPrevReadTimeStamp)
             self.mPrevReadTimeStamp = time.time()     # Capture previous data read timestamp in order to detect data rate issues
             #self.mLogger.info('data Rate: %.4f', self.mDataRate)
         else :

@@ -26,8 +26,8 @@ SemaphoreHandle_t radioSemaphore = NULL;
 
 // Define BNO IMU
 #define BNO08X_CS 10
-#define BNO08X_INT 9
-#define BNO08X_RESET -1
+#define BNO08X_INT 18
+#define BNO08X_RESET 15
 Adafruit_BNO08x  bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
 
@@ -1154,8 +1154,9 @@ void setup()
 
   // SETUP Button
   pinMode(BUTTON_PIN, INPUT);
-
+  
   // SETUP BNO
+  pinMode(BNO08X_INT, INPUT_PULLUP);
   Wire.setClock(400000);
   if (!bno08x.begin_I2C()) 
   {

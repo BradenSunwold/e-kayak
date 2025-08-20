@@ -223,9 +223,6 @@ void myDelayMsUntil(TickType_t *previousWakeTime, int ms)
 
 void imuISR() 
 {
-  // Disable interrupt 
-  detachInterrupt(digitalPinToInterrupt(BNO08X_INT)); 
-  
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
   // Wake up the task
@@ -320,7 +317,6 @@ static void ReadImuTask( void *pvParameters )
 
       // myDelayMs(gReadImuTaskRateInMs); 
     }
-    attachInterrupt(digitalPinToInterrupt(BNO08X_INT), imuISR, FALLING);
   }
   
   Serial.println("Task Monitor: Deleting");

@@ -20,7 +20,7 @@ void TimingStats::UpdateAllStatsInTicks(uint32_t newExecutionTimeInTicks)
   CalculateMinExecutionTimeInTicks(newExecutionTimeInTicks);
   CalculateMaxExecutionTimeInTicks(newExecutionTimeInTicks);
   CalculateAverageExecutionTimeInTicks(newExecutionTimeInTicks);
-  // CalculateVarianceAndStdDevInTicks(newExecutionTimeInTicks);
+  CalculateVarianceAndStdDevInTicks(newExecutionTimeInTicks);
 }
 
 // Getters

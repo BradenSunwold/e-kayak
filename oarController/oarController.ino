@@ -27,9 +27,10 @@ SemaphoreHandle_t radioSemaphore = NULL;
 // Define BNO IMU
 #define BNO08X_CS 10
 #define BNO08X_INT 18
-#define BNO08X_RESET 15
+#define BNO08X_RESET -1 //15
 Adafruit_BNO08x  bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
+SemaphoreHandle_t imuSem;
 
 // #define PIXEL_PIN 10
 // #define LED_COUNT 12
@@ -115,7 +116,7 @@ std::function<void(int, uint32_t*)> StartupFrameGenerator(const uint32_t* leftHa
 //######################** Support functions ****************************//
 void SetImuReports()
 {
-  long reportIntervalUs = 39000;    // Setting to 39 creates average output rate of 50Hz when sampling all three reports at ~66Hz for some reason
+  long reportIntervalUs = 20000;    // Setting to 39 creates average output rate of 50Hz when sampling all three reports at ~66Hz for some reason
 
   Serial.println("Setting desired reports");
   if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, reportIntervalUs)) 
@@ -220,6 +221,16 @@ void myDelayMsUntil(TickType_t *previousWakeTime, int ms)
   vTaskDelayUntil( previousWakeTime, (ms * 1000) / portTICK_PERIOD_US );  
 }
 
+void imuISR() {
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+  // Wake up the task
+  xSemaphoreGiveFromISR(imuSem, &xHigherPriorityTaskWoken);
+
+  // Request context switch if needed
+  portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
 
 static void ReadImuTask( void *pvParameters ) 
 {
@@ -231,64 +242,80 @@ static void ReadImuTask( void *pvParameters )
   bool accelDataFreshFlag = false;
   bool gyroDataFreshFlag = false;  
 
+  uint32_t imuReadTimeBegin = 0;
+  uint32_t imuReadTimeEnd = 0;
+
   while(1)
   {
-    readImuMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
-    readImuMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
-
-    // Read incoming sensor data
-    while(bno08x.getSensorEvent(&sensorData))
+    if (xSemaphoreTake(imuSem, portMAX_DELAY) == pdTRUE)
     {
-      // Check for IMU reset
-      if (bno08x.wasReset()) 
+      readImuMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
+      readImuMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
+
+      // Serial.println("Tik");
+      // imuReadTimeBegin = xTaskGetTickCount();
+
+      // Read incoming sensor data
+      while(bno08x.getSensorEvent(&sensorData))
       {
-        Serial.print("sensor was reset ");
-        SetImuReports();
+        // Serial.println("Tok");
+        // Serial.println("AHRS Read");
+        // Check for IMU reset
+        if (bno08x.wasReset()) 
+        {
+          Serial.print("sensor was reset ");
+          SetImuReports();
+        }
+        
+        switch (sensorData.sensorId) 
+        {
+          case SH2_ARVR_STABILIZED_RV :
+            quaternionToEulerRV(&sensorData.un.arvrStabilizedRV, &fullImuDataSet.fEulerData, true);
+            fusedDataFreshFlag = true;
+
+            // Serial.print("Pitch: ");
+            // Serial.println(fullImuDataSet.fEulerData.fPitch);
+            // Serial.println("Roll: ");
+            // Serial.println(fullImuDataSet.fEulerData.fRoll);
+            // Serial.print("Yaw: ");
+            // Serial.println(fullImuDataSet.fEulerData.fYaw);
+            break;
+          case SH2_ACCELEROMETER :
+            fullImuDataSet.fAddReportsVect.fX.fAccel = sensorData.un.accelerometer.x;
+            fullImuDataSet.fAddReportsVect.fY.fAccel = sensorData.un.accelerometer.y;
+            fullImuDataSet.fAddReportsVect.fZ.fAccel = sensorData.un.accelerometer.z;
+            accelDataFreshFlag = true;
+            break;
+          case SH2_GYROSCOPE_CALIBRATED :
+            fullImuDataSet.fAddReportsVect.fX.fGyro = sensorData.un.gyroscope.x;
+            fullImuDataSet.fAddReportsVect.fY.fGyro = sensorData.un.gyroscope.y;
+            fullImuDataSet.fAddReportsVect.fZ.fGyro = sensorData.un.gyroscope.z;
+            gyroDataFreshFlag = true;
+            break;
+          default : 
+            Serial.println("Nothing recieved from IMU");
+        }
+
+        // imuReadTimeEnd = xTaskGetTickCount();
+        // uint32_t imuReadTime = imuReadTimeEnd - imuReadTimeBegin;
+
+        // Serial.println(imuReadTime);
       }
-      
-      switch (sensorData.sensorId) 
+
+      if(fusedDataFreshFlag && accelDataFreshFlag && gyroDataFreshFlag)
       {
-        case SH2_ARVR_STABILIZED_RV :
-          quaternionToEulerRV(&sensorData.un.arvrStabilizedRV, &fullImuDataSet.fEulerData, true);
-          fusedDataFreshFlag = true;
+        xQueueOverwrite(imuDataQueue, (void*)&fullImuDataSet);
 
-          // Serial.print("Pitch: ");
-          // Serial.println(fullImuDataSet.fEulerData.fPitch);
-          // Serial.println("Roll: ");
-          // Serial.println(fullImuDataSet.fEulerData.fRoll);
-          // Serial.print("Yaw: ");
-          // Serial.println(fullImuDataSet.fEulerData.fYaw);
-          break;
-        case SH2_ACCELEROMETER :
-          fullImuDataSet.fAddReportsVect.fX.fAccel = sensorData.un.accelerometer.x;
-          fullImuDataSet.fAddReportsVect.fY.fAccel = sensorData.un.accelerometer.y;
-          fullImuDataSet.fAddReportsVect.fZ.fAccel = sensorData.un.accelerometer.z;
-          accelDataFreshFlag = true;
-          break;
-        case SH2_GYROSCOPE_CALIBRATED :
-          fullImuDataSet.fAddReportsVect.fX.fGyro = sensorData.un.gyroscope.x;
-          fullImuDataSet.fAddReportsVect.fY.fGyro = sensorData.un.gyroscope.y;
-          fullImuDataSet.fAddReportsVect.fZ.fGyro = sensorData.un.gyroscope.z;
-          gyroDataFreshFlag = true;
-          break;
-        default : 
-          Serial.println("Nothing recieved from IMU");
+        // Reset flags
+        fusedDataFreshFlag = false;
+        accelDataFreshFlag = false;
+        gyroDataFreshFlag = false;
       }
+
+      readImuMetaData.GetExecutionTimer().Stop();
+
+      // myDelayMs(gReadImuTaskRateInMs); 
     }
-
-    if(fusedDataFreshFlag && accelDataFreshFlag && gyroDataFreshFlag)
-    {
-      xQueueOverwrite(imuDataQueue, (void*)&fullImuDataSet);
-
-      // Reset flags
-      fusedDataFreshFlag = false;
-      accelDataFreshFlag = false;
-      gyroDataFreshFlag = false;
-    }
-
-    readImuMetaData.GetExecutionTimer().Stop();
-
-    myDelayMs(gReadImuTaskRateInMs);    // execute task at 20Hz
   }
   
   Serial.println("Task Monitor: Deleting");
@@ -1156,7 +1183,17 @@ void setup()
   pinMode(BUTTON_PIN, INPUT);
   
   // SETUP BNO
+  imuSem = xSemaphoreCreateBinary();
+  if (imuSem == NULL) {
+    Serial.println("Failed to create semaphore!");
+    while (1);
+  }
+
   pinMode(BNO08X_INT, INPUT_PULLUP);
+  // Attach ISR to falling edge (BNO08x pulls INT low when data ready)
+  attachInterrupt(digitalPinToInterrupt(BNO08X_INT), imuISR, FALLING);
+  // attachInterrupt(digitalPinToInterrupt(BNO08X_INT), imuISR, LOW);
+
   Wire.setClock(400000);
   if (!bno08x.begin_I2C()) 
   {
@@ -1183,10 +1220,10 @@ void setup()
   ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
 
   // Set all task call rates
-  gReadImuTaskRateInMs = 10; 
+  // gReadImuTaskRateInMs = 10; 
   gProcessOutTaskRateInMs = 50; 
   gButtonInTaskRateInMs = 20; 
-  gRfRadioTaskRateInMs = 20; 
+  gRfRadioTaskRateInMs = 40; 
   gLedDriverTaskRateInMs = 25; 
   gLedTesterTaskRateInMs = 50; 
   gDiagDumpTaskRateInMs = 5000; 

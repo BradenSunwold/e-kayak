@@ -27,8 +27,8 @@ SemaphoreHandle_t radioSemaphore = NULL;
 // Define BNO IMU
 #define BNO08X_CS 10
 #define BNO08X_INT 18
-#define BNO08X_RESET -1 //15
-Adafruit_BNO08x  bno08x(BNO08X_RESET);
+#define BNO08X_RESET 15
+Adafruit_BNO08x  bno08x(-1);
 sh2_SensorValue_t sensorValue;
 SemaphoreHandle_t imuSem;
 
@@ -37,9 +37,8 @@ SemaphoreHandle_t imuSem;
 // Adafruit_NeoPixel strip(LED_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 #define BUTTON_PIN 12
-#define POWER_HOLD 13
-
 #define VBATPIN A0
+#define DEBUG_LED 13
 
 // #define configUSE_IDLE_HOOK 1
 
@@ -110,6 +109,8 @@ typedef struct
 // Forward decs
 std::function<void(int, uint32_t*)> GaugeFrameGenerator(float speedPercentage, float batteryPercentage);
 std::function<void(int, uint32_t*)> StartupFrameGenerator(const uint32_t* leftHalfColors, const uint32_t* rightHalfColors);
+TimerHandle_t imuWatchdogTimer;
+bool gImuTimeout = false;
 
 
 
@@ -232,6 +233,13 @@ void imuISR()
   portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+void imuWatchdogCallback(TimerHandle_t xTimer) 
+{
+  // Give the semaphore in case INT never fired
+  xSemaphoreGive(imuSem);
+  gImuTimeout = true;
+}
+
 
 static void ReadImuTask( void *pvParameters ) 
 {
@@ -255,6 +263,16 @@ static void ReadImuTask( void *pvParameters )
 
       // Serial.println("Tik");
       // imuReadTimeBegin = xTaskGetTickCount();
+
+       xTimerReset(imuWatchdogTimer, 0);
+
+      // Check for IMU reset
+      if (bno08x.wasReset() || gImuTimeout) 
+      {
+        Serial.print("sensor was reset ");
+        SetImuReports();
+        gImuTimeout = false;
+      }
 
       // Read incoming sensor data
       while(bno08x.getSensorEvent(&sensorData))
@@ -988,6 +1006,9 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     diagTaskMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
     diagTaskMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
+    uint8_t currentDebugLedOutput = digitalRead(DEBUG_LED);
+    digitalWrite(DEBUG_LED, !currentDebugLedOutput);
+
     // Print average timings
 
     // Print read IMU diag
@@ -1157,8 +1178,7 @@ static void DumpTaskMetaDataTask( void *pvParameters )
 
 void setup() 
 {
-  pinMode(POWER_HOLD, OUTPUT);
-  digitalWrite(POWER_HOLD, HIGH);
+  pinMode(DEBUG_LED, OUTPUT);
 
   int serialResetCount = 0;
   Serial.begin(115200);
@@ -1174,8 +1194,8 @@ void setup()
   radio.openReadingPipe(1, address[1]);
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_LOW);
-  radio.setDataRate(RF24_1MBPS);      // default - RF24_1MBPS
-  radio.setRetries(3, 2);             // Need to test with Rx and Tx running on motor and oar
+  radio.setDataRate(RF24_2MBPS);      // default - RF24_1MBPS
+  radio.setRetries(4, 5);             // Need to test with Rx and Tx running on motor and oar
   radio.enableDynamicPayloads();
   // radio.setChannel(90);
   // radio.setAutoAck(false);
@@ -1191,6 +1211,7 @@ void setup()
   }
 
   pinMode(BNO08X_INT, INPUT_PULLUP);
+  pinMode(BNO08X_RESET, INPUT_PULLUP);
   // Attach ISR to falling edge (BNO08x pulls INT low when data ready)
   attachInterrupt(digitalPinToInterrupt(BNO08X_INT), imuISR, FALLING);
   // attachInterrupt(digitalPinToInterrupt(BNO08X_INT), imuISR, LOW);
@@ -1230,15 +1251,19 @@ void setup()
   gDiagDumpTaskRateInMs = 5000; 
 
   // Create tasks                                                                                                         // Total RAM usage: ~4KB RAM
-  xTaskCreate(ReadImuTask, "Read IMU", 210, NULL, tskIDLE_PRIORITY + 11, &Handle_ReadImuTask);                              // 736 bytes
-  xTaskCreate(ButtonInputTask, "Button In",  80, NULL, tskIDLE_PRIORITY + 9, &Handle_ButtonInputTask);                    // 336 bytes
-  xTaskCreate(ProcessOutputsTask, "Process Outputs", 130, NULL, tskIDLE_PRIORITY + 9, &Handle_ProcessOutputsTask);        // 936 bytes
+  xTaskCreate(ReadImuTask, "Read IMU", 208, NULL, tskIDLE_PRIORITY + 11, &Handle_ReadImuTask);                              // 736 bytes
+  xTaskCreate(ButtonInputTask, "Button In",  128, NULL, tskIDLE_PRIORITY + 9, &Handle_ButtonInputTask);                    // 336 bytes
+  xTaskCreate(ProcessOutputsTask, "Process Outputs", 144, NULL, tskIDLE_PRIORITY + 9, &Handle_ProcessOutputsTask);        // 936 bytes
   xTaskCreate(RfRadioTask, "RF Out", 160, NULL, tskIDLE_PRIORITY + 10, &Handle_RfRadioTask);                             // 432 bytes
-  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 130, NULL, tskIDLE_PRIORITY + 8, &Handle_LedPixelUpdaterTask);        // 928 bytes
+  xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 136, NULL, tskIDLE_PRIORITY + 8, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
-  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 100, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
+  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 112, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
   //  xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
+
+  // Create watchdog timer (500 ms period, auto-reload)
+  imuWatchdogTimer = xTimerCreate("IMUwd", pdMS_TO_TICKS(1000), pdTRUE, NULL, imuWatchdogCallback);
+  xTimerStart(imuWatchdogTimer, 0);
   
 
   Serial.println("");

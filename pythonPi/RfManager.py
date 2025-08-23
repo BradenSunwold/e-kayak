@@ -31,6 +31,9 @@ class RfManager(threading.Thread):
     self.mCurrentBatteryVolt = 100.0	# Variables to hold last RF messages received
     self.mCurrentMotorMode = 0
     self.mCurrentMotorSpeed = 0
+    self.mPrevMotorMode = 0
+    self.mPrevMotorSpeed = 0
+
 
     self.mPrevReadTimeStamp = time.time()
     self.mPrevWriteTimeStamp = time.time()
@@ -70,8 +73,8 @@ class RfManager(threading.Thread):
     self.mRadio.set_pa_level(RF24_PA_LOW)  # RF24_PA_LOW tested in box at 15 feet
     self.mRadio.open_tx_pipe(self.mAddress[self.mRadioNumber])  
     self.mRadio.open_rx_pipe(1, self.mAddress[not self.mRadioNumber])  
-    self.mRadio.setRetries(3, 2)
-    self.mRadio.setDataRate(RF24_1MBPS)  # Set data rate to 2Mbps for faster data transfer
+    self.mRadio.setRetries(4, 5)
+    self.mRadio.setDataRate(RF24_2MBPS)  # Set data rate to 2Mbps for faster data transfer
     self.mRadio.dynamic_payloads = True
     # self.mRadio.setChannel(90) # Set channel to 90 for less interference
     # self.mRadio.set_auto_ack(False)
@@ -129,9 +132,13 @@ class RfManager(threading.Thread):
         if(struct.unpack("B", received[:1])[0] == 1) :
             self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY = struct.unpack(self.mRfReceiveDataFormatMsgOne, received)
 
-            # Send new motor commands to the MotorManager thread 
-            motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
-            self.mOutgoingQueue.put(motorModeCommand)
+            if(self.mPrevMotorMode != self.mCurrentMotorMode or self.mPrevMotorSpeed != self.mCurrentMotorSpeed) :
+              # Send new motor commands to the MotorManager thread 
+              motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
+              self.mOutgoingQueue.put(motorModeCommand)
+              
+            self.mPrevMotorMode = self.mCurrentMotorMode
+            self.mPrevMotorSpeed = self.mCurrentMotorSpeed
             
             # Log IMU data
             self.mLogger.debug('Msg 1')

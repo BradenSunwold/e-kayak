@@ -84,6 +84,7 @@ class RfManager(threading.Thread):
     # Read from motor status queue
     try :
       newCommand = self.mIncomingQueue.get(timeout=.05)
+
       print("Writing")
       
       status, data = struct.unpack('hf', newCommand)

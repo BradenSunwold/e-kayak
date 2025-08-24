@@ -40,6 +40,8 @@ SemaphoreHandle_t imuSem;
 #define VBATPIN A0
 #define DEBUG_LED 13
 
+#define Serial Serial1
+
 // #define configUSE_IDLE_HOOK 1
 
 // Structs / Enums
@@ -119,20 +121,20 @@ void SetImuReports()
 {
   long reportIntervalUs = 20000;    // Setting to 39 creates average output rate of 50Hz when sampling all three reports at ~66Hz for some reason
 
-  Serial.println("Setting desired reports");
+  // Serial.println("Setting desired reports");
   if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, reportIntervalUs)) 
   {
-    Serial.println("Could not enable stabilized remote vector");
+    // Serial.println("Could not enable stabilized remote vector");
   }
 
   if (!bno08x.enableReport(SH2_ACCELEROMETER, reportIntervalUs)) 
   {
-    Serial.println("Could not enable accelerometer");
+    // Serial.println("Could not enable accelerometer");
   }
 
   if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, reportIntervalUs)) 
   {
-    Serial.println("Could not enable gyroscope");
+    // Serial.println("Could not enable gyroscope");
   }
 }
 
@@ -269,7 +271,7 @@ static void ReadImuTask( void *pvParameters )
       // Check for IMU reset
       if (bno08x.wasReset() || gImuTimeout) 
       {
-        Serial.print("sensor was reset ");
+        // Serial.print("sensor was reset ");
         SetImuReports();
         gImuTimeout = false;
       }
@@ -282,7 +284,7 @@ static void ReadImuTask( void *pvParameters )
         // Check for IMU reset
         if (bno08x.wasReset()) 
         {
-          Serial.print("sensor was reset ");
+          // Serial.print("sensor was reset ");
           SetImuReports();
         }
         
@@ -337,7 +339,7 @@ static void ReadImuTask( void *pvParameters )
     }
   }
   
-  Serial.println("Task Monitor: Deleting");
+  // Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -364,25 +366,25 @@ static void ButtonInputTask( void *pvParameters )
     buttonInputMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
     buttonInputMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
-    // ===== Non-blocking Serial Mock Input =====
-    if (Serial.available() > 0) {
-      char c = Serial.read(); // Non-blocking read of one character
+    // // ===== Non-blocking Serial Mock Input =====
+    // if (Serial.available() > 0) {
+    //   char c = Serial.read(); // Non-blocking read of one character
 
-      if (c == 's') {
-        Serial.println("MOCK: SINGLE");
-        if (currButtonState.fSpeed == 3) {
-          currButtonState.fSpeed = 0;
-        } else {
-          currButtonState.fSpeed++;
-        }
-        xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
-      }
-      else if (c == 'd') {
-        Serial.println("MOCK: DOUBLE");
-        currButtonState.fAutoMode = !currButtonState.fAutoMode;
-        xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
-      }
-    }
+    //   if (c == 's') {
+    //     Serial.println("MOCK: SINGLE");
+    //     if (currButtonState.fSpeed == 3) {
+    //       currButtonState.fSpeed = 0;
+    //     } else {
+    //       currButtonState.fSpeed++;
+    //     }
+    //     xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
+    //   }
+    //   else if (c == 'd') {
+    //     Serial.println("MOCK: DOUBLE");
+    //     currButtonState.fAutoMode = !currButtonState.fAutoMode;
+    //     xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
+    //   }
+    // }
 
     // ===== Physical button read =====
     int reading = digitalRead(BUTTON_PIN);
@@ -420,7 +422,7 @@ static void ButtonInputTask( void *pvParameters )
       if(buttonStateChangeCount > 2)
       {
         // Found double click
-        Serial.println("DOUBLE");
+        // Serial.println("DOUBLE");
 
         // Update the current state
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
@@ -429,7 +431,7 @@ static void ButtonInputTask( void *pvParameters )
       else if(buttonStateChangeCount > 1)
       {
         // Found single click
-        Serial.println("SINGLE");
+        // Serial.println("SINGLE");
 
         // Update the current state
         if(currButtonState.fSpeed == 3)
@@ -461,7 +463,7 @@ static void ButtonInputTask( void *pvParameters )
     myDelayMs(gButtonInTaskRateInMs);   // execute task at 20Hz
   }
 
-  Serial.println("Task Monitor: Deleting");
+  // Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -523,7 +525,7 @@ static void ProcessOutputsTask( void *pvParameters )
         .fNumCyclesBlock = 1,
         .fNumFrames = LED_COUNT
       };
-      Serial.println("Comms Loss");
+      // Serial.println("Comms Loss");
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
     }
     else
@@ -565,7 +567,7 @@ static void ProcessOutputsTask( void *pvParameters )
           case eHighCurrent :
           case eComsLoss :
           case eUnknownFault :                                // faults take priority
-            Serial.println("FAULT");
+            // Serial.println("FAULT");
             gMotorFaultFlag = true;
 
             // Set error animation
@@ -627,7 +629,7 @@ static void ProcessOutputsTask( void *pvParameters )
             break;
           
           default :
-            Serial.println("Did not recieve valid RF message");
+            // Serial.println("Did not recieve valid RF message");
             break;
         }
       }
@@ -673,9 +675,9 @@ static void ProcessOutputsTask( void *pvParameters )
         .fNumFrames = LED_COUNT
       };
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-      Serial.println("Sending new battery status");
-      Serial.println(speedPercentageReported);
-      Serial.println(totalBatteryPercentageReport);
+      // Serial.println("Sending new battery status");
+      // Serial.println(speedPercentageReported);
+      // Serial.println(totalBatteryPercentageReport);
 
       prevTotalBatteryPercentage = totalBatteryPercentageReport;  // Update previous battery percentate
     }
@@ -698,8 +700,8 @@ static void ProcessOutputsTask( void *pvParameters )
             .fNumCyclesBlock = 2,
             .fNumFrames = LED_COUNT
           };
-          Serial.print("Mode: ");
-          Serial.println(paddleCmdMsg.fAutoMode);
+          // Serial.print("Mode: ");
+          // Serial.println(paddleCmdMsg.fAutoMode);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
           xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
         }
@@ -723,7 +725,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
   }
 
-  Serial.println("Task Monitor: Deleting");
+  // Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -802,7 +804,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
   }
 
-  Serial.println("Task Monitor: Deleting");
+  // Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -867,7 +869,7 @@ static void LedPixelUpdaterTester( void *pvParameters )
     // Serial.println(taskTime);
   }
 
-  Serial.println("Task Monitor: Deleting");
+  // Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -941,6 +943,8 @@ static void RfRadioTask( void *pvParameters )
 
     if(newTxData)
     {
+      digitalWrite(DEBUG_LED, HIGH);
+
       rfRadioMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
       // New data is available to send
       radio.stopListening();    // put radio in TX mode
@@ -953,6 +957,7 @@ static void RfRadioTask( void *pvParameters )
       newTxData = false;    // Reset fresh data flag
 
       rfRadioMetaData.GetExecutionTimer().Stop(); 
+      digitalWrite(DEBUG_LED, LOW);
     }
 
     /************************************** RX *****************************************/
@@ -994,7 +999,7 @@ static void RfRadioTask( void *pvParameters )
 
   }
 
-  Serial.println("Task Monitor: Deleting");
+  // Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -1171,7 +1176,7 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     myDelayMs(gDiagDumpTaskRateInMs);   // execute task at .5Hz
   }
 
-  Serial.println("Task Monitor: Deleting");
+  // Serial.println("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -1180,14 +1185,14 @@ void setup()
 {
   pinMode(DEBUG_LED, OUTPUT);
 
-  int serialResetCount = 0;
-  Serial.begin(115200);
-  while (!Serial && serialResetCount < 100) 
-  {
-    delay(10);     // will pause until serial console opens
-    serialResetCount++;
-  }
-  Serial.println("Begin Setup");
+  // int serialResetCount = 0;
+  // Serial.begin(115200);
+  // while (!Serial && serialResetCount < 100) 
+  // {
+  //   delay(10);     // will pause until serial console opens
+  //   serialResetCount++;
+  // }
+  // Serial.println("Begin Setup");
 
   // SETUP RF24 RADIO
   radio.begin();
@@ -1206,7 +1211,7 @@ void setup()
   // SETUP BNO
   imuSem = xSemaphoreCreateBinary();
   if (imuSem == NULL) {
-    Serial.println("Failed to create semaphore!");
+    // Serial.println("Failed to create semaphore!");
     while (1);
   }
 
@@ -1219,13 +1224,13 @@ void setup()
   Wire.setClock(400000);
   if (!bno08x.begin_I2C()) 
   {
-    Serial.println("Failed to find BNO08x chip");
+    // Serial.println("Failed to find BNO08x chip");
     while (1) 
     {   
       delay(10); 
     }
   }
-  Serial.println("BNO08x Found!");
+  // Serial.println("BNO08x Found!");
   SetImuReports();
 
   // SETUP NEOPIXELS
@@ -1258,7 +1263,7 @@ void setup()
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 136, NULL, tskIDLE_PRIORITY + 8, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
-  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 112, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
+  // xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 112, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
   //  xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
 
   // Create watchdog timer (500 ms period, auto-reload)
@@ -1266,11 +1271,11 @@ void setup()
   xTimerStart(imuWatchdogTimer, 0);
   
 
-  Serial.println("");
-  Serial.println("******************************");
-  Serial.println("        Program start         ");
-  Serial.println("******************************");
-  Serial.flush();
+  // Serial.println("");
+  // Serial.println("******************************");
+  // Serial.println("        Program start         ");
+  // Serial.println("******************************");
+  // Serial.flush();
 
   // Start the RTOS, this function will never return and will schedule the tasks.
   vTaskStartScheduler();
@@ -1279,8 +1284,8 @@ void setup()
   // should never get here
   while(1)
   {
-	  Serial.println("Scheduler Failed! \n");
-	  Serial.flush();
+	  // Serial.println("Scheduler Failed! \n");
+	  // Serial.flush();
 	  delay(1000);
   }
 

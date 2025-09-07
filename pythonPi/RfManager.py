@@ -73,7 +73,7 @@ class RfManager(threading.Thread):
     self.mRadio.set_pa_level(RF24_PA_LOW)  # RF24_PA_LOW tested in box at 15 feet
     self.mRadio.open_tx_pipe(self.mAddress[self.mRadioNumber])  
     self.mRadio.open_rx_pipe(1, self.mAddress[not self.mRadioNumber])  
-    self.mRadio.setRetries(4, 5)
+    self.mRadio.setRetries(4, 6)
     self.mRadio.setDataRate(RF24_2MBPS)  # Set data rate to 2Mbps for faster data transfer
     self.mRadio.dynamic_payloads = True
     # self.mRadio.setChannel(90) # Set channel to 90 for less interference

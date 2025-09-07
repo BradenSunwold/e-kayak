@@ -1,0 +1,17 @@
+[Unit]
+Description=Start up the boat manager but ensure it starts after enabling the VESC 
+After=EnableVesc.service
+Requires=EnableVesc.service
+
+[Service]
+# The ExecStart command includes sourcing the virtual environment
+ExecStart=/home/bradensunwold/Documents/e-kayak/pythonPi/bin/python -u /home/bradensunwold/Documents/e-kayak/pythonPi/BoatManager.py
+WorkingDirectory=/home/bradensunwold/Documents/e-kayak/pythonPi
+StandardOutput=journal
+StandardError=journal
+Restart=always
+User=bradensunwold
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

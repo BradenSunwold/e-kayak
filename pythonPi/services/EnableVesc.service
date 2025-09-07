@@ -1,0 +1,15 @@
+[Unit]
+Description=Enable VESC Controller
+After=network.target
+
+[Service]
+ExecStart=/bin/bash -c 'source /home/bradensunwold/Documents/e-kayak/pythonPi/bin/activate && exec python /home/bradensunwold/Documents/e-kayak/pythonPi/enableVesc.py'
+#ExecStart=/usr/bin/python3 /home/bradensunwold/Documents/e-kayak/pythonPi/enableVesc.py
+WorkingDirectory=/home/bradensunwold/Documents/e-kayak/pythonPi
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=bradensunwold
+
+[Install]
+WantedBy=multi-user.target

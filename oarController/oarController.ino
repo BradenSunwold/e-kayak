@@ -1200,7 +1200,7 @@ void setup()
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_LOW);
   radio.setDataRate(RF24_2MBPS);      // default - RF24_1MBPS
-  radio.setRetries(4, 5);             // Need to test with Rx and Tx running on motor and oar
+  radio.setRetries(4, 6);             // Need to test with Rx and Tx running on motor and oar
   radio.enableDynamicPayloads();
   // radio.setChannel(90);
   // radio.setAutoAck(false);

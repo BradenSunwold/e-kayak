@@ -15,12 +15,12 @@ motorManager:
   #   - SpeedOne: 40.0
   #   - SpeedTwo: 60.0
   #   - SpeedThree: 90.0
-  maxRpms: 500 # 2145 corresponds to about 65% duty cycle and 12A current draw
+  maxRpms: 2145 # 2145 corresponds to about 65% duty cycle and 12A current draw  # 500 for testing
   speedSettingToRpmMapInPercent: # Number of elements here has to match numberOfSpeedSettings
     - 0.0
     - 60.0
     - 80.0
-    - 90.0
+    - 95.0
   underVoltage: 20
   batteryCalibrationOffset: .8    # VESC battery monitor ~.7 - .8V off from measured battery voltage
   maxTemp: 60

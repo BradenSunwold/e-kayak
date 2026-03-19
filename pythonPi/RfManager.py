@@ -12,8 +12,6 @@ import queue
 
 from yaml import load, SafeLoader
 
-from KayakDefines import StatusType
-from KayakDefines import MotorCmd
 
 
 class RfManager(threading.Thread):
@@ -31,8 +29,6 @@ class RfManager(threading.Thread):
     self.mCurrentBatteryVolt = 100.0	# Variables to hold last RF messages received
     self.mCurrentMotorMode = 0
     self.mCurrentMotorSpeed = 0
-    self.mPrevMotorMode = 0
-    self.mPrevMotorSpeed = 0
 
 
     self.mPrevReadTimeStamp = time.time()
@@ -85,7 +81,7 @@ class RfManager(threading.Thread):
     try :
       newCommand = self.mIncomingQueue.get(timeout=.05)
 
-      print("Writing")
+      # print("Writing")
       
       status, data = struct.unpack('hf', newCommand)
       
@@ -112,7 +108,7 @@ class RfManager(threading.Thread):
     self.mScheduler.enter(self.mTxInterval, 1, self.RfSend)
 
   def RfReceive(self):
-    print("Reading")
+    # print("Reading")
     # self.mRadio.payload_size = 28   # standard incoming data will be 28 bytes
     self.mRadio.listen = True 
    
@@ -133,13 +129,9 @@ class RfManager(threading.Thread):
         if(struct.unpack("B", received[:1])[0] == 1) :
             self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY = struct.unpack(self.mRfReceiveDataFormatMsgOne, received)
 
-            if(self.mPrevMotorMode != self.mCurrentMotorMode or self.mPrevMotorSpeed != self.mCurrentMotorSpeed) :
-              # Send new motor commands to the MotorManager thread 
-              motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
-              self.mOutgoingQueue.put(motorModeCommand)
-              
-            self.mPrevMotorMode = self.mCurrentMotorMode
-            self.mPrevMotorSpeed = self.mCurrentMotorSpeed
+            # Always forward motor commands to MotorManager as heartbeat
+            motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
+            self.mOutgoingQueue.put(motorModeCommand)
             
             # Log IMU data
             self.mLogger.debug('Msg 1')
@@ -164,15 +156,6 @@ class RfManager(threading.Thread):
             self.mLogger.info('Y Gyroscope: %.4f', self.mCurrentGyroY)
             self.mLogger.info('Z Acceleration: %.4f', self.mCurrentAccelZ)
             self.mLogger.info('Z Gyroscope: %.4f', self.mCurrentGyroZ)
-    else :
-      activeRead = False
-        
-      # If we don't get a new message within 7 seconds, trigger comms loss fault
-      if(time.time() - self.mPrevReadTimeStamp > 7) : 
-        commsLossCommand = struct.pack("?B", self.mCurrentMotorMode, 255)
-        self.mOutgoingQueue.put(commsLossCommand)
-        self.mLogger.info("Comms loss triggered")
-
     self.mScheduler.enter(self.mRxInterval, 1, self.RfReceive)
 
   def StartScheduler(self) :

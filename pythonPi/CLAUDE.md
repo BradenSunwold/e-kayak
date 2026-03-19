@@ -31,6 +31,10 @@ Python-based controller running on a Raspberry Pi 5. This is the main kayak-side
 - **Onboard IMU:** For heading hold and complementing oar IMU data
 - **GPS:** For auto-tagging training data and maintaining a straight heading
 
+## Important Constraints
+
+- **`StatusType` in `KayakDefines.py` is a shared protocol struct** — it defines what is transmitted from the Pi to the oar remote controller. Any changes to `StatusType` require a matching update in the oar controller project. The oar side only needs to know there is a fault so it can flash red and stop commanding.
+
 ## Key Files
 
 - `main.py` — Entry point

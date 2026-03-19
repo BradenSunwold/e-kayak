@@ -79,4 +79,20 @@ motorManager:
     - 0.0011717562511
 
   faultClearTimeoutInMilliseconds: 2000   # How long does fault have to be cleared to unlatch
+  vescComsLossTimeoutInMilliseconds: 2000  # Fault if no VESC response for this long
+  oarComsLossTimeoutInMilliseconds: 2000   # Fault if no oar command received for this long
+  maxRpmReduction: 250                     # Max total RPM reduction from over-current recoveries before latching
+  faultConfig:
+    overTemp:
+      latching: false
+    overCurrent:
+      latching: false
+    underVoltage:
+      latching: false
+    comsLoss:
+      latching: false
+    vescComsLoss:
+      latching: true
+    unknown:
+      latching: true
   motorLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/motorLog.txt

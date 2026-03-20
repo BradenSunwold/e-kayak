@@ -4,3 +4,4 @@ pythonPi/logs/
 pythonPi/lib/
 pythonPi/pyvenv.cfg
 pythonPi/share/
+__pycache__/

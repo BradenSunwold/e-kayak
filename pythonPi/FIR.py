@@ -1,11 +1,3 @@
-from enum import IntEnum
-import sys
-import argparse
-import time
-import struct
-from yaml import load, SafeLoader
-
-
 class FIR():
     def __init__(self, taps):
         self.mTaps = taps
@@ -58,6 +50,6 @@ class FIR():
     
     def Load(self, taps) :
         self.mTaps = taps
-        self.mSize = taps.len()
+        self.mSize = len(taps)
         
         self.Clear()

@@ -1,18 +1,13 @@
 from enum import IntEnum
-import sys
-import argparse
 import time
 import struct
 import sched
-import yaml
-import logging
-import RPi.GPIO as GPIO
-import serial
-import pyvesc
-from pyvesc import GetValues, SetRPM, SetCurrent
-from yaml import load, SafeLoader
 import threading
 import queue
+import serial
+import RPi.GPIO as GPIO
+import pyvesc
+from pyvesc import GetValues, SetRPM, SetCurrent
 import FIR
 
 from KayakDefines import StatusType
@@ -101,6 +96,7 @@ class MotorManager(threading.Thread):
         self.mStartupReversalTimeout = self.mConfigurator['startupReverseTimeInMilliseconds']
         self.mStartupLatched = True
         self.mStartupTime = time.time()
+        self.mMotorPolePairs = self.mConfigurator['motorPolePairs']
         self.mFaultConfig = self.mConfigurator['faultConfig']
 
         # Init RPM rate limiter
@@ -114,8 +110,18 @@ class MotorManager(threading.Thread):
         self.mMotorWriteInterval = self.mConfigurator['motorWriteRateInMilliseconds'] / 1000
         self.mMotorReadInterval = self.mConfigurator['motorReadRateInMilliseconds'] / 1000
 
+        # Init VESC enable GPIO
+        self.mVescEnablePin = self.mConfigurator['vescEnableGpioPin']
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(self.mVescEnablePin, GPIO.OUT)
+        GPIO.output(self.mVescEnablePin, True)
+        self.mLogger.info('VESC enabled on GPIO %s', self.mVescEnablePin)
+
+        # Shutdown flag
+        self.mShutdownRequested = False
+
         # Init serial communication
-        self.mSerial = serial.Serial ("/dev/ttyS0", 115200, timeout=0.05)
+        self.mSerial = serial.Serial("/dev/ttyS0", 115200, timeout=0.05)
 
 
     def _DetectFault(self, faultCode):
@@ -238,6 +244,8 @@ class MotorManager(threading.Thread):
 
     # Read commands from both oar and ML module - decide which one to use later
     def ReadCommands(self) :
+        if self.mShutdownRequested:
+            return
         # First, check if we have new data from the RF manager - manual oar mode
         try :
             newCommand = self.mIncomingQueue.get(timeout=.05)
@@ -247,13 +255,13 @@ class MotorManager(threading.Thread):
 
             numberSpeeds = self.mConfigurator['numberOfSpeedSettings']
 
-            if(tmpRpm >= 0 and tmpRpm <= numberSpeeds) :
+            if(tmpRpm >= 0 and tmpRpm < numberSpeeds) :
                 self.mMode = tmpMode
                 self.mMotorSpeedManual = tmpRpm
                 self.mLastOarMessageTime = time.time()
 
-                self.mLogger.info('Oar Mode Command: %s', self.mMode)
-                self.mLogger.info('Oar Speed Command: %s', self.mMotorSpeedManual)
+                self.mLogger.debug('Oar Mode Command: %s', self.mMode)
+                self.mLogger.debug('Oar Speed Command: %s', self.mMotorSpeedManual)
             else :
                 self.mLogger.info("Received invalid motor commands")
 
@@ -266,6 +274,8 @@ class MotorManager(threading.Thread):
 
     # Update RPM speed based on received commands
     def WriteMotor(self) :
+        if self.mShutdownRequested:
+            return
         # Check on faults
         if self.mActiveFault != FaultType.NONE:
             self.mRpm = 0.0
@@ -277,12 +287,12 @@ class MotorManager(threading.Thread):
         elif self.mMode == 0 :
             # We are in manual mode - use speed lookup table
             self.mRpm = (self.mSpeedSettingToRpmMap[self.mMotorSpeedManual] / 100) * self.mMaxRpms
-            self.mLogger.info('In Mode 0')
+            self.mLogger.debug('In Mode 0')
         else :
             # Use estimated speed based on ML model
             # self.mRpm = self.mEstimatedSpeed
             self.mMode = 0      # For now, force manual mode
-            self.mLogger.info('Force Mode 0')
+            self.mLogger.debug('Force Mode 0')
 
         # If we are in a startup, ignore all faults and commands - Force a reversal for X seconds
         if(self.mStartupLatched == True) :
@@ -292,16 +302,18 @@ class MotorManager(threading.Thread):
                 self.mLogger.info('Exiting Startup Reversal')
 
         # Send RPM command to the motor
-        self.mLogger.info('Rpm Step Command: %s', self.mRpm)
+        self.mLogger.debug('Rpm Step Command: %s', self.mRpm)
         filteredRpm = self.mRateLimiter.Feed(self.mRpm)
-        self.mLogger.info('Filtered RPM: %s', filteredRpm)
+        self.mLogger.debug('Filtered RPM: %s', filteredRpm)
 
-        filteredRpm *= 7
+        filteredRpm *= self.mMotorPolePairs
         self.mSerial.write(pyvesc.encode(SetRPM(int(filteredRpm))))
 
         self.mScheduler.enter(self.mMotorWriteInterval, 1, self.WriteMotor)
 
     def ReadMotor(self) :
+        if self.mShutdownRequested:
+            return
         # Read status from motor
         self.mSerial.write(pyvesc.encode_request(GetValues))
 
@@ -321,24 +333,24 @@ class MotorManager(threading.Thread):
                 self.mDutyCycle = response.duty_now
                 self.mTemp = response.temp_fets
                 self.mPowerMotorIn = self.mVoltage * self.mCurrentIn
-                self.mRpmFeedback = response.rpm / 6                    # Divide ERPM by # poles to get RPM
+                self.mRpmFeedback = response.rpm / self.mMotorPolePairs   # Divide ERPM by # poles to get RPM
                 self.mLastVescResponseTime = time.time()
                 gotVescResponse = True
 
                 # Log motor values
-                self.mLogger.info('*** MOTOR STATUS ***:')
-                self.mLogger.info('Fet Temperature: %s', response.temp_fets)
-                self.mLogger.info('Duty Cycle: %s', response.duty_now)
-                self.mLogger.info('RPM: %s', response.rpm / 6)
-                self.mLogger.info('VESC measured Input Voltage: %s', response.v_in)
-                self.mLogger.info('Calibrated Input Voltage: %s', self.mVoltage)
-                self.mLogger.info('Current In: %s', response.current_in)
-                self.mLogger.info('Motor Current: %s', response.current_motor)
-                self.mLogger.info('Amp Hours: %s', response.amp_hours)
-                self.mLogger.info('Watt Hours: %s', response.watt_hours)
-                self.mLogger.info('Fault Code: %s', vescFaultCode)
-                self.mLogger.info('Power: %s', self.mPowerMotorIn)
-                self.mLogger.info('Active Fault: %s', self.mActiveFault.name)
+                self.mLogger.debug('*** MOTOR STATUS ***:')
+                self.mLogger.debug('Fet Temperature: %s', response.temp_fets)
+                self.mLogger.debug('Duty Cycle: %s', response.duty_now)
+                self.mLogger.debug('RPM: %s', response.rpm / self.mMotorPolePairs)
+                self.mLogger.debug('VESC measured Input Voltage: %s', response.v_in)
+                self.mLogger.debug('Calibrated Input Voltage: %s', self.mVoltage)
+                self.mLogger.debug('Current In: %s', response.current_in)
+                self.mLogger.debug('Motor Current: %s', response.current_motor)
+                self.mLogger.debug('Amp Hours: %s', response.amp_hours)
+                self.mLogger.debug('Watt Hours: %s', response.watt_hours)
+                self.mLogger.debug('Fault Code: %s', vescFaultCode)
+                self.mLogger.debug('Power: %s', self.mPowerMotorIn)
+                self.mLogger.debug('Active Fault: %s', self.mActiveFault.name)
 
             except Exception as e:
                 self.mLogger.error('ReadMotor exception: %s', e)
@@ -357,5 +369,32 @@ class MotorManager(threading.Thread):
         # Start the scheduler
         self.mScheduler.run()
 
-    def run(self) :
+    def shutdown(self):
+        """Safely shut down the motor and VESC."""
+        self.mLogger.info('Shutdown requested')
+        self.mShutdownRequested = True
+
+        # Command motor to zero
+        try:
+            self.mSerial.write(pyvesc.encode(SetCurrent(0)))
+            self.mLogger.info('Motor set to 0 current')
+        except Exception as e:
+            self.mLogger.error('Failed to zero motor: %s', e)
+
+        # Close serial port
+        try:
+            self.mSerial.close()
+            self.mLogger.info('Serial port closed')
+        except Exception as e:
+            self.mLogger.error('Failed to close serial: %s', e)
+
+        # Disable VESC
+        try:
+            GPIO.output(self.mVescEnablePin, False)
+            GPIO.cleanup(self.mVescEnablePin)
+            self.mLogger.info('VESC disabled on GPIO %s', self.mVescEnablePin)
+        except Exception as e:
+            self.mLogger.error('Failed to disable VESC GPIO: %s', e)
+
+    def run(self):
         self.StartScheduler()

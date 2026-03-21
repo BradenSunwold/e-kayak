@@ -44,6 +44,8 @@ class RfManager(threading.Thread):
         self.mScheduler = sched.scheduler(time.time, time.sleep)
         self.mRxInterval = self.mConfigurator['rfReadDataRateInMilliseconds'] / 1000
         self.mTxInterval = self.mConfigurator['rfWriteDataRateInMilliseconds'] / 1000
+        self.mNextRxTime = 0
+        self.mNextTxTime = 0
 
         # Set up radio for coms
         self.mRadio = RF24(22, 0)
@@ -71,30 +73,35 @@ class RfManager(threading.Thread):
     def RfSend(self):
         if self.mShutdownRequested:
             return
-        # Read from motor status queue
+        # Only leave RX mode if we actually have data to send
         try:
-            newCommand = self.mIncomingQueue.get(timeout=.05)
-
-            status, data = struct.unpack('hf', newCommand)
-
-            self.mRadio.listen = False  # ensures the nRF24L01 is in TX mode
-
-            payload = struct.pack('hf', status, data)
-            self.mLogger.debug('RF sending status: %s', status)
-            self.mLogger.debug('RF sending data: %s', data)
-
-            self.mLogger.debug('Tx message timing: %.4f', time.time() - self.mPrevWriteTimeStamp)
-            self.mPrevWriteTimeStamp = time.time()
-
-            result = self.mRadio.write(payload)
-
-            if not result:
-                self.mLogger.error("RF transmission failed or timed out")
-
+            newCommand = self.mIncomingQueue.get_nowait()
         except queue.Empty:
-            self.mLogger.debug("Queue is empty after timeout. No new motor status")
+            # Schedule next TX attempt and return if no data to send
+            self.mNextTxTime += self.mTxInterval
+            self.mScheduler.enterabs(self.mNextTxTime, 1, self.RfSend)
+            return
 
-        self.mScheduler.enter(self.mTxInterval, 1, self.RfSend)
+        status, data = struct.unpack('hf', newCommand)
+        payload = struct.pack('hf', status, data)
+
+        # Minimize deaf window: TX off, write, TX back on
+        self.mRadio.listen = False
+        result = self.mRadio.write(payload)
+        self.mRadio.listen = True
+
+        # Log after radio is back in RX mode
+        self.mLogger.debug('Tx message timing: %.4f', time.time() - self.mPrevWriteTimeStamp)
+        self.mPrevWriteTimeStamp = time.time()
+        self.mLogger.debug('RF sending status: %s', status)
+        self.mLogger.debug('RF sending data: %s', data)
+
+        if not result:
+            self.mLogger.error("RF transmission failed or timed out")
+
+        # Schedule next transmission
+        self.mNextTxTime += self.mTxInterval
+        self.mScheduler.enterabs(self.mNextTxTime, 1, self.RfSend)
 
     def RfReceive(self):
         if self.mShutdownRequested:
@@ -137,12 +144,18 @@ class RfManager(threading.Thread):
                 self.mLogger.debug('Y Gyroscope: %.4f', self.mCurrentGyroY)
                 self.mLogger.debug('Z Acceleration: %.4f', self.mCurrentAccelZ)
                 self.mLogger.debug('Z Gyroscope: %.4f', self.mCurrentGyroZ)
-        self.mScheduler.enter(self.mRxInterval, 1, self.RfReceive)
+        self.mNextRxTime += self.mRxInterval
+        self.mScheduler.enterabs(self.mNextRxTime, 1, self.RfReceive)
 
     def StartScheduler(self):
+        # Initialize absolute schedule times
+        now = time.time()
+        self.mNextTxTime = now
+        self.mNextRxTime = now
+
         # Schedule the initial run of functions
-        self.mScheduler.enter(0, 1, self.RfSend)
-        self.mScheduler.enter(0, 1, self.RfReceive)
+        self.mScheduler.enterabs(self.mNextTxTime, 1, self.RfSend)
+        self.mScheduler.enterabs(self.mNextRxTime, 1, self.RfReceive)
 
         # Start the scheduler
         self.mScheduler.run()

@@ -109,6 +109,9 @@ class MotorManager(threading.Thread):
         self.mCommandReadInterval = self.mConfigurator['motorCommandReadRateInMilliseconds'] / 1000
         self.mMotorWriteInterval = self.mConfigurator['motorWriteRateInMilliseconds'] / 1000
         self.mMotorReadInterval = self.mConfigurator['motorReadRateInMilliseconds'] / 1000
+        self.mNextCommandReadTime = 0
+        self.mNextMotorWriteTime = 0
+        self.mNextMotorReadTime = 0
 
         # Init VESC enable GPIO
         self.mVescEnablePin = self.mConfigurator['vescEnableGpioPin']
@@ -274,7 +277,8 @@ class MotorManager(threading.Thread):
 
         # Read ML module - Empty for now
 
-        self.mScheduler.enter(self.mCommandReadInterval, 1, self.ReadCommands)
+        self.mNextCommandReadTime += self.mCommandReadInterval
+        self.mScheduler.enterabs(self.mNextCommandReadTime, 1, self.ReadCommands)
 
     # Update RPM speed based on received commands
     def WriteMotor(self) :
@@ -313,7 +317,8 @@ class MotorManager(threading.Thread):
         filteredRpm *= self.mMotorPolePairs
         self.mSerial.write(pyvesc.encode(SetRPM(int(filteredRpm))))
 
-        self.mScheduler.enter(self.mMotorWriteInterval, 1, self.WriteMotor)
+        self.mNextMotorWriteTime += self.mMotorWriteInterval
+        self.mScheduler.enterabs(self.mNextMotorWriteTime, 1, self.WriteMotor)
 
     def ReadMotor(self) :
         if self.mShutdownRequested:
@@ -362,13 +367,20 @@ class MotorManager(threading.Thread):
         # Fault state machine always runs regardless of VESC response
         self._UpdateFaultState(vescFaultCode, gotVescResponse)
 
-        self.mScheduler.enter(self.mMotorReadInterval, 1, self.ReadMotor)
+        self.mNextMotorReadTime += self.mMotorReadInterval
+        self.mScheduler.enterabs(self.mNextMotorReadTime, 1, self.ReadMotor)
 
     def StartScheduler(self) :
+        # Initialize absolute schedule times
+        now = time.time()
+        self.mNextCommandReadTime = now
+        self.mNextMotorWriteTime = now
+        self.mNextMotorReadTime = now
+
         # Schedule the initial run of functions
-        self.mScheduler.enter(0, 1, self.ReadCommands)
-        self.mScheduler.enter(0, 1, self.WriteMotor)
-        self.mScheduler.enter(0, 1, self.ReadMotor)
+        self.mScheduler.enterabs(self.mNextCommandReadTime, 1, self.ReadCommands)
+        self.mScheduler.enterabs(self.mNextMotorWriteTime, 1, self.WriteMotor)
+        self.mScheduler.enterabs(self.mNextMotorReadTime, 1, self.ReadMotor)
 
         # Start the scheduler
         self.mScheduler.run()

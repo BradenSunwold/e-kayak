@@ -14,7 +14,7 @@ Python-based controller running on a Raspberry Pi 5. This is the main kayak-side
 
 ## Interfaces
 
-- **nRF24 (RF link):** Receives input commands and IMU data from the oar remote
+- **nRF24 (RF link):** Receives mode-based single packets from the oar remote. Manual mode packets contain roll/pitch/yaw; auto mode packets contain raw accel/gyro. The mode byte in each packet determines the parse format.
 - **UART:** Sends speed commands to the BLDC motor controller; monitors for motor faults
 
 ## Current Functionality
@@ -34,6 +34,7 @@ Python-based controller running on a Raspberry Pi 5. This is the main kayak-side
 ## Important Constraints
 
 - **`StatusType` in `KayakDefines.py` is a shared protocol struct** — it defines what is transmitted from the Pi to the oar remote controller. Any changes to `StatusType` require a matching update in the oar controller project. The oar side only needs to know there is a fault so it can flash red and stop commanding.
+- **RF RX parsing is mode-based** — `RfManager.py` reads the mode byte from each incoming packet to decide the format: manual (`B?Bfff`, 15 bytes) or auto (`B?Bffffff`, 27 bytes). Changes to the oar-side `RfManualMsg_t` / `RfAutoMsg_t` structs require matching updates to the format strings here.
 
 ## Key Files
 

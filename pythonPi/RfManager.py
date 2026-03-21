@@ -17,8 +17,8 @@ class RfManager(threading.Thread):
         # Initialize class member variables
         self.mIncomingQueue = incomingQueue
         self.mOutgoingQueue = outgoingQueue
-        self.mRfReceiveDataFormatMsgOne = 'B?Bffffff'
-        self.mRfReceiveDataFormatMsgTwo = 'Bffffff'
+        self.mRfReceiveFormatManual = 'B?Bfff'
+        self.mRfReceiveFormatAuto = 'B?Bffffff'
         self.mCurrentMotorMode = 0
         self.mCurrentMotorSpeed = 0
 
@@ -112,34 +112,36 @@ class RfManager(threading.Thread):
             received = self.mRadio.read(length)
 
             try:
-                # If this is first half of message
-                if struct.unpack("B", received[:1])[0] == 1:
-                    self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY = struct.unpack(self.mRfReceiveDataFormatMsgOne, received)
+                # Parse header: index, mode, speed (first 3 bytes are the same for both formats)
+                self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed = struct.unpack('B?B', received[:3])
 
-                    # Always forward motor commands to MotorManager as heartbeat
-                    motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
-                    self.mOutgoingQueue.put(motorModeCommand)
+                # Always forward motor commands to MotorManager as heartbeat
+                motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
+                self.mOutgoingQueue.put(motorModeCommand)
 
-                    # Log IMU data
-                    self.mLogger.debug('Msg 1')
-                    self.mLogger.debug('Mode: %s', self.mCurrentMotorMode)
+                if not self.mCurrentMotorMode:
+                    # Manual mode: roll, pitch, yaw
+                    self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw = struct.unpack('fff', received[3:15])
+
+                    self.mLogger.debug('Manual mode packet')
                     self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
                     self.mLogger.debug('Roll: %.4f', self.mCurrentRoll)
                     self.mLogger.debug('Pitch: %.4f', self.mCurrentPitch)
                     self.mLogger.debug('Yaw: %.4f', self.mCurrentYaw)
-
-                    self.mEventTimer.mark('rf_rx')
                 else:
-                    self.mCurrentMsgNum, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveDataFormatMsgTwo, received)
+                    # Auto mode: raw accel + gyro (x, y, z)
+                    self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack('ffffff', received[3:27])
 
-                    # Log IMU data
-                    self.mLogger.debug('Msg 2')
+                    self.mLogger.debug('Auto mode packet')
+                    self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
                     self.mLogger.debug('X Acceleration: %.4f', self.mCurrentAccelX)
                     self.mLogger.debug('X Gyroscope: %.4f', self.mCurrentGyroX)
                     self.mLogger.debug('Y Acceleration: %.4f', self.mCurrentAccelY)
                     self.mLogger.debug('Y Gyroscope: %.4f', self.mCurrentGyroY)
                     self.mLogger.debug('Z Acceleration: %.4f', self.mCurrentAccelZ)
                     self.mLogger.debug('Z Gyroscope: %.4f', self.mCurrentGyroZ)
+
+                self.mEventTimer.mark('rf_rx')
             except Exception as e:
                 self.mLogger.error('RfReceive malformed packet (%d bytes): %s', length, e)
         self.mNextRxTime += self.mRxInterval

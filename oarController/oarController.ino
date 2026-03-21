@@ -94,19 +94,19 @@ typedef struct
   ImuAddReportsVector_t fAddReportsVect;
 } FullImuDataSet_t;
 
-typedef struct 
+typedef struct
 {
-  uint8_t fMessageIndex_1;
+  uint8_t fMessageIndex;
   PaddleCmdMsg_t fOutputCmd;
   ImuDataType_t fOutputImuEuler;
-  float fPad[3];
-} RfOutputMsgFirstHalf_t;
+} RfManualMsg_t;
 
-typedef struct 
+typedef struct
 {
-  uint8_t fMessageIndex_2;
+  uint8_t fMessageIndex;
+  PaddleCmdMsg_t fOutputCmd;
   ImuAddReportsVector_t fOutputImuAddReports;
-} RfOutputMsgSecondHalf_t;
+} RfAutoMsg_t;
 
 // Forward decs
 std::function<void(int, uint32_t*)> GaugeFrameGenerator(float speedPercentage, float batteryPercentage);
@@ -884,8 +884,8 @@ static void RfRadioTask( void *pvParameters )
   PaddleCmdOut.fSpeed = 0;
 
   FullImuDataSet_t imuDataOut;
-  RfOutputMsgFirstHalf_t outputMsgFirstHalf;
-  RfOutputMsgSecondHalf_t outputMsgSecondHalf;
+  RfManualMsg_t manualMsg;
+  RfAutoMsg_t autoMsg;
 
   // initialize IMU data
   imuDataOut.fEulerData.fRoll = 0.0;
@@ -898,12 +898,13 @@ static void RfRadioTask( void *pvParameters )
   imuDataOut.fAddReportsVect.fZ.fAccel = 0.0;
   imuDataOut.fAddReportsVect.fZ.fGyro = 0.0;
 
-  outputMsgFirstHalf.fMessageIndex_1 = 1;
-  outputMsgFirstHalf.fOutputCmd = PaddleCmdOut;
-  outputMsgFirstHalf.fOutputImuEuler = imuDataOut.fEulerData;
+  manualMsg.fMessageIndex = 1;
+  manualMsg.fOutputCmd = PaddleCmdOut;
+  manualMsg.fOutputImuEuler = imuDataOut.fEulerData;
 
-  outputMsgSecondHalf.fMessageIndex_2 = 2;
-  outputMsgSecondHalf.fOutputImuAddReports = imuDataOut.fAddReportsVect;
+  autoMsg.fMessageIndex = 1;
+  autoMsg.fOutputCmd = PaddleCmdOut;
+  autoMsg.fOutputImuAddReports = imuDataOut.fAddReportsVect;
 
   bool newTxData = false;
 
@@ -929,18 +930,17 @@ static void RfRadioTask( void *pvParameters )
     {
       rfRadioMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
 
-      // Package IMU data into RF output struct
-      memcpy(&outputMsgFirstHalf.fOutputImuEuler, &imuDataOut.fEulerData, sizeof(imuDataOut.fEulerData));
-      memcpy(&outputMsgSecondHalf.fOutputImuAddReports, &imuDataOut.fAddReportsVect, sizeof(imuDataOut.fAddReportsVect));
+      // Package IMU data into both structs (only the active one will be sent)
+      memcpy(&manualMsg.fOutputImuEuler, &imuDataOut.fEulerData, sizeof(imuDataOut.fEulerData));
+      memcpy(&autoMsg.fOutputImuAddReports, &imuDataOut.fAddReportsVect, sizeof(imuDataOut.fAddReportsVect));
       newTxData = true;
     }
     if(xQueueReceive(rfOutMsgQueue, (void *)&PaddleCmdOut, 0) == pdTRUE)
     {
-      // Package state into RF output struct
-      memcpy(&outputMsgFirstHalf.fOutputCmd, &PaddleCmdOut, sizeof(PaddleCmdOut));
+      // Package state into both output structs
+      memcpy(&manualMsg.fOutputCmd, &PaddleCmdOut, sizeof(PaddleCmdOut));
+      memcpy(&autoMsg.fOutputCmd, &PaddleCmdOut, sizeof(PaddleCmdOut));
       newTxData = true;
-      // Serial.println(outputMsgFirstHalf.fOutputState.fAutoMode);
-      // Serial.println(outputMsgFirstHalf.fOutputState.fSpeed);
     }
 
     if(newTxData)
@@ -949,14 +949,20 @@ static void RfRadioTask( void *pvParameters )
       // New data is available to send
       radio.stopListening();    // put radio in TX mode
 
-      // Send RF data out
-      bool report = radio.write(&outputMsgFirstHalf, sizeof(outputMsgFirstHalf));  // transmit & save the report
-      report = radio.write(&outputMsgSecondHalf, sizeof(outputMsgSecondHalf));  // transmit & save the report
+      // Send single packet based on current mode
+      if(PaddleCmdOut.fAutoMode)
+      {
+        radio.write(&autoMsg, sizeof(autoMsg));
+      }
+      else
+      {
+        radio.write(&manualMsg, sizeof(manualMsg));
+      }
 
       radio.startListening();    // put radio in RX mode
       newTxData = false;    // Reset fresh data flag
 
-      rfRadioMetaData.GetExecutionTimer().Stop(); 
+      rfRadioMetaData.GetExecutionTimer().Stop();
     }
 
     /************************************** RX *****************************************/

@@ -3,6 +3,7 @@ import signal
 import yaml
 import logging
 import queue
+from datetime import datetime
 
 from RfManager import RfManager
 from MotorManager import MotorManager
@@ -13,20 +14,26 @@ def main():
         config = yaml.safe_load(configStream)
 
     logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', filemode='w')
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     loggerRf = logging.getLogger('loggerRf')
     loggerMotor = logging.getLogger('loggerMotor')
 
+    # Build timestamped log file paths
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H:%M.%S')
+    rfLogDir = os.path.dirname(config['rfManager']['rfLoggerFilePath'])
+    motorLogDir = os.path.dirname(config['motorManager']['motorLoggerFilePath'])
+    rfLogPath = os.path.join(rfLogDir, f'rfLog_{timestamp}.log')
+    motorLogPath = os.path.join(motorLogDir, f'motorLog_{timestamp}.log')
+
     # Create logging handlers
-    rfFileHandler = logging.FileHandler(config['rfManager']['rfLoggerFilePath'])
+    rfFileHandler = logging.FileHandler(rfLogPath)
     rfFileHandler.setLevel(logging.DEBUG)
-    motorFileHandler = logging.FileHandler(config['motorManager']['motorLoggerFilePath'])
+    motorFileHandler = logging.FileHandler(motorLogPath)
     motorFileHandler.setLevel(logging.DEBUG)
 
-    rfLoggerFormatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    rfFileHandler.setFormatter(rfLoggerFormatter)
-    motorLoggerFormatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    motorFileHandler.setFormatter(motorLoggerFormatter)
+    logFormatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    rfFileHandler.setFormatter(logFormatter)
+    motorFileHandler.setFormatter(logFormatter)
 
     loggerRf.addHandler(rfFileHandler)
     loggerMotor.addHandler(motorFileHandler)

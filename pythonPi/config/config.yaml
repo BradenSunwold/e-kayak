@@ -1,8 +1,8 @@
 ---
 rfManager:
   rfReadDataRateInMilliseconds: 10
-  rfWriteDataRateInMilliseconds: 200
-  rfLoggerVerbosityLevel: 1
+  rfWriteDataRateInMilliseconds: 100
+  rfLoggerVerbosityLevel: DEBUG
   rfLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/rfLog.txt
 motorManager:
   motorCommandReadRateInMilliseconds: 50
@@ -97,4 +97,5 @@ motorManager:
       latching: true
     unknown:
       latching: true
+  motorLoggerVerbosityLevel: DEBUG
   motorLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/motorLog.txt

@@ -19,7 +19,6 @@ class RfManager(threading.Thread):
         self.mOutgoingQueue = outgoingQueue
         self.mRfReceiveDataFormatMsgOne = 'B?Bffffff'
         self.mRfReceiveDataFormatMsgTwo = 'Bffffff'
-        self.mCurrentBatteryVolt = 100.0
         self.mCurrentMotorMode = 0
         self.mCurrentMotorSpeed = 0
 
@@ -72,30 +71,30 @@ class RfManager(threading.Thread):
     def RfSend(self):
         if self.mShutdownRequested:
             return
-        # Only leave RX mode if we actually have data to send
-        try:
-            newCommand = self.mIncomingQueue.get_nowait()
-        except queue.Empty:
-            # Schedule next TX attempt and return if no data to send
-            self.mNextTxTime += self.mTxInterval
-            self.mScheduler.enterabs(self.mNextTxTime, 1, self.RfSend)
-            return
 
-        status, data = struct.unpack('hf', newCommand)
-        payload = struct.pack('hf', status, data)
+        # Drain all pending messages from the outgoing queue
+        messages = []
+        while True:
+            try:
+                messages.append(self.mIncomingQueue.get_nowait())
+            except queue.Empty:
+                break
 
-        # Minimize deaf window: TX off, write, TX back on
-        self.mRadio.listen = False
-        result = self.mRadio.write(payload)
+        if messages:
+            self.mRadio.listen = False
+            for newCommand in messages:
+                status, data = struct.unpack('hf', newCommand)
+                payload = struct.pack('hf', status, data)
+                result = self.mRadio.write(payload)
+
+                self.mEventTimer.mark('rf_tx')
+                self.mLogger.debug('RF sending status: %s', status)
+                self.mLogger.debug('RF sending data: %s', data)
+
+                if not result:
+                    self.mLogger.error("RF transmission failed or timed out")
+
         self.mRadio.listen = True
-
-        # Log after radio is back in RX mode
-        self.mEventTimer.mark('rf_tx')
-        self.mLogger.debug('RF sending status: %s', status)
-        self.mLogger.debug('RF sending data: %s', data)
-
-        if not result:
-            self.mLogger.error("RF transmission failed or timed out")
 
         # Schedule next transmission
         self.mNextTxTime += self.mTxInterval
@@ -112,34 +111,37 @@ class RfManager(threading.Thread):
             length = self.mRadio.getDynamicPayloadSize()
             received = self.mRadio.read(length)
 
-            # If this is first half of message
-            if struct.unpack("B", received[:1])[0] == 1:
-                self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY = struct.unpack(self.mRfReceiveDataFormatMsgOne, received)
+            try:
+                # If this is first half of message
+                if struct.unpack("B", received[:1])[0] == 1:
+                    self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY = struct.unpack(self.mRfReceiveDataFormatMsgOne, received)
 
-                # Always forward motor commands to MotorManager as heartbeat
-                motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
-                self.mOutgoingQueue.put(motorModeCommand)
+                    # Always forward motor commands to MotorManager as heartbeat
+                    motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
+                    self.mOutgoingQueue.put(motorModeCommand)
 
-                # Log IMU data
-                self.mLogger.debug('Msg 1')
-                self.mLogger.debug('Mode: %s', self.mCurrentMotorMode)
-                self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
-                self.mLogger.debug('Roll: %.4f', self.mCurrentRoll)
-                self.mLogger.debug('Pitch: %.4f', self.mCurrentPitch)
-                self.mLogger.debug('Yaw: %.4f', self.mCurrentYaw)
+                    # Log IMU data
+                    self.mLogger.debug('Msg 1')
+                    self.mLogger.debug('Mode: %s', self.mCurrentMotorMode)
+                    self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
+                    self.mLogger.debug('Roll: %.4f', self.mCurrentRoll)
+                    self.mLogger.debug('Pitch: %.4f', self.mCurrentPitch)
+                    self.mLogger.debug('Yaw: %.4f', self.mCurrentYaw)
 
-                self.mEventTimer.mark('rf_rx')
-            else:
-                self.mCurrentMsgNum, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveDataFormatMsgTwo, received)
+                    self.mEventTimer.mark('rf_rx')
+                else:
+                    self.mCurrentMsgNum, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveDataFormatMsgTwo, received)
 
-                # Log IMU data
-                self.mLogger.debug('Msg 2')
-                self.mLogger.debug('X Acceleration: %.4f', self.mCurrentAccelX)
-                self.mLogger.debug('X Gyroscope: %.4f', self.mCurrentGyroX)
-                self.mLogger.debug('Y Acceleration: %.4f', self.mCurrentAccelY)
-                self.mLogger.debug('Y Gyroscope: %.4f', self.mCurrentGyroY)
-                self.mLogger.debug('Z Acceleration: %.4f', self.mCurrentAccelZ)
-                self.mLogger.debug('Z Gyroscope: %.4f', self.mCurrentGyroZ)
+                    # Log IMU data
+                    self.mLogger.debug('Msg 2')
+                    self.mLogger.debug('X Acceleration: %.4f', self.mCurrentAccelX)
+                    self.mLogger.debug('X Gyroscope: %.4f', self.mCurrentGyroX)
+                    self.mLogger.debug('Y Acceleration: %.4f', self.mCurrentAccelY)
+                    self.mLogger.debug('Y Gyroscope: %.4f', self.mCurrentGyroY)
+                    self.mLogger.debug('Z Acceleration: %.4f', self.mCurrentAccelZ)
+                    self.mLogger.debug('Z Gyroscope: %.4f', self.mCurrentGyroZ)
+            except Exception as e:
+                self.mLogger.error('RfReceive malformed packet (%d bytes): %s', length, e)
         self.mNextRxTime += self.mRxInterval
         self.mScheduler.enterabs(self.mNextRxTime, 1, self.RfReceive)
 

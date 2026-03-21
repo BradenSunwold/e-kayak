@@ -11,7 +11,6 @@ from pyvesc import GetValues, SetRPM, SetCurrent
 import FIR
 
 from KayakDefines import StatusType
-from KayakDefines import MotorCmd
 from KayakDefines import VescFaultCodes
 
 
@@ -255,14 +254,14 @@ class MotorManager(threading.Thread):
             return
         # First, check if we have new data from the RF manager - manual oar mode
         try :
-            newCommand = self.mIncomingQueue.get(timeout=.05)
+            newCommand = self.mIncomingQueue.get_nowait()
 
             # Check what msg we got
             tmpMode, tmpRpm = struct.unpack('?B', newCommand)
 
             numberSpeeds = self.mConfigurator['numberOfSpeedSettings']
 
-            if(tmpRpm >= 0 and tmpRpm < numberSpeeds) :
+            if(tmpRpm < numberSpeeds) :
                 self.mMode = tmpMode
                 self.mMotorSpeedManual = tmpRpm
                 self.mLastOarMessageTime = time.time()
@@ -331,9 +330,9 @@ class MotorManager(threading.Thread):
 
         if self.mSerial.in_waiting > 78 :
             buffer = self.mSerial.read(79)
-            (response, consumed) = pyvesc.decode(buffer)
 
             try :
+                (response, consumed) = pyvesc.decode(buffer)
                 # Store motor values - decode fault code once
                 vescFaultCode = int.from_bytes(response.mc_fault_code, byteorder='big')
                 self.mVoltage = response.v_in + self.mVoltageOffset
@@ -341,7 +340,7 @@ class MotorManager(threading.Thread):
                 self.mCurrentMotor = response.current_motor
                 self.mDutyCycle = response.duty_now
                 self.mTemp = response.temp_fets
-                self.mPowerMotorIn = self.mVoltage * self.mCurrentIn
+                self.mPowerMotor = self.mVoltage * self.mCurrentIn
                 self.mRpmFeedback = response.rpm / self.mMotorPolePairs   # Divide ERPM by # poles to get RPM
                 self.mLastVescResponseTime = time.time()
                 gotVescResponse = True
@@ -358,7 +357,7 @@ class MotorManager(threading.Thread):
                 self.mLogger.debug('Amp Hours: %s', response.amp_hours)
                 self.mLogger.debug('Watt Hours: %s', response.watt_hours)
                 self.mLogger.debug('Fault Code: %s', vescFaultCode)
-                self.mLogger.debug('Power: %s', self.mPowerMotorIn)
+                self.mLogger.debug('Power: %s', self.mPowerMotor)
                 self.mLogger.debug('Active Fault: %s', self.mActiveFault.name)
 
             except Exception as e:

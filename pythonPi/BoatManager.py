@@ -15,8 +15,17 @@ def main():
 
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    LOG_LEVEL_MAP = {
+        'DEBUG': logging.DEBUG,
+        'INFO': logging.INFO,
+        'WARN': logging.WARNING,
+        'ERROR': logging.ERROR,
+    }
+
     loggerRf = logging.getLogger('loggerRf')
+    loggerRf.setLevel(LOG_LEVEL_MAP[config['rfManager']['rfLoggerVerbosityLevel']])
     loggerMotor = logging.getLogger('loggerMotor')
+    loggerMotor.setLevel(LOG_LEVEL_MAP[config['motorManager']['motorLoggerVerbosityLevel']])
 
     # Build timestamped log file paths
     timestamp = datetime.now().strftime('%Y-%m-%d_%H:%M.%S')

@@ -4,6 +4,7 @@ import sched
 import threading
 import queue
 from pyrf24 import RF24, RF24_PA_LOW, RF24_2MBPS
+from EventTimer import EventTimer
 
 
 class RfManager(threading.Thread):
@@ -22,9 +23,7 @@ class RfManager(threading.Thread):
         self.mCurrentMotorMode = 0
         self.mCurrentMotorSpeed = 0
 
-        self.mPrevReadTimeStamp = time.time()
-        self.mPrevWriteTimeStamp = time.time()
-        self.mDataRate = 0
+        self.mEventTimer = EventTimer(self.mLogger)
 
         # IMU member vars
         self.mCurrentMsgNum = 0
@@ -91,8 +90,7 @@ class RfManager(threading.Thread):
         self.mRadio.listen = True
 
         # Log after radio is back in RX mode
-        self.mLogger.debug('Tx message timing: %.4f', time.time() - self.mPrevWriteTimeStamp)
-        self.mPrevWriteTimeStamp = time.time()
+        self.mEventTimer.mark('rf_tx')
         self.mLogger.debug('RF sending status: %s', status)
         self.mLogger.debug('RF sending data: %s', data)
 
@@ -130,9 +128,7 @@ class RfManager(threading.Thread):
                 self.mLogger.debug('Pitch: %.4f', self.mCurrentPitch)
                 self.mLogger.debug('Yaw: %.4f', self.mCurrentYaw)
 
-                self.mDataRate = 1 / (time.time() - self.mPrevReadTimeStamp)
-                self.mLogger.debug('Rx message timing: %.4f', time.time() - self.mPrevReadTimeStamp)
-                self.mPrevReadTimeStamp = time.time()
+                self.mEventTimer.mark('rf_rx')
             else:
                 self.mCurrentMsgNum, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveDataFormatMsgTwo, received)
 

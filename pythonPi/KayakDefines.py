@@ -10,6 +10,8 @@ class StatusType(IntEnum):
   eComsLoss = 4
   eUnknownFault = 5
   eFaultCleared = 6
+  eOverTemp = 7
+  eVescComsLoss = 8
   
 class MotorCmd(IntEnum):
   eModeCmd = 0

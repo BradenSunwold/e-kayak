@@ -26,11 +26,11 @@ class FaultType(IntEnum):
 
 # Maps internal fault type to the StatusType sent to the oar controller
 FAULT_TO_STATUS = {
-    FaultType.OVER_TEMP: StatusType.eUnknownFault,
+    FaultType.OVER_TEMP: StatusType.eOverTemp,
     FaultType.OVER_CURRENT: StatusType.eHighCurrent,
     FaultType.UNDER_VOLTAGE: StatusType.eLowBattery,
     FaultType.COMS_LOSS: StatusType.eComsLoss,
-    FaultType.VESC_COMS_LOSS: StatusType.eUnknownFault,
+    FaultType.VESC_COMS_LOSS: StatusType.eVescComsLoss,
     FaultType.UNKNOWN: StatusType.eUnknownFault,
 }
 
@@ -129,6 +129,10 @@ class MotorManager(threading.Thread):
         # Software over-temp check
         if self.mTemp > self.mMaxTemp:
             return FaultType.OVER_TEMP
+
+        # Software under-voltage check (guard against startup when mVoltage is 0)
+        if self.mVoltage > 0 and self.mVoltage < self.mUnderVoltage:
+            return FaultType.UNDER_VOLTAGE
 
         # VESC fault codes (ignore OVER_TEMP_MOTOR - no motor temp sensor installed)
         if faultCode == VescFaultCodes.FAULT_CODE_OVER_TEMP_FET:

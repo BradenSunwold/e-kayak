@@ -51,7 +51,9 @@ typedef enum
   eHighCurrent, 
   eComsLoss,
   eUnknownFault,
-  eFaultCleared
+  eFaultCleared,
+  eOverTemp,
+  eVescComsLoss
 } StatusType_t;
 
 typedef struct 
@@ -564,7 +566,9 @@ static void ProcessOutputsTask( void *pvParameters )
           case eLowBattery : 
           case eHighCurrent :
           case eComsLoss :
-          case eUnknownFault :                                // faults take priority
+          case eUnknownFault :
+          case eOverTemp :
+          case eVescComsLoss :                                  // faults take priority
             Serial.println("FAULT");
             gMotorFaultFlag = true;
 

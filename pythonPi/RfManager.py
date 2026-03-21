@@ -112,25 +112,22 @@ class RfManager(threading.Thread):
             received = self.mRadio.read(length)
 
             try:
-                # Parse header: index, mode, speed (first 3 bytes are the same for both formats)
-                self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed = struct.unpack('B?B', received[:3])
+                # Use payload length to determine format (accounts for C struct padding)
+                # RfManualMsg_t: sizeof = 16 bytes (1+1+1+pad+3×float)
+                # RfAutoMsg_t:   sizeof = 28 bytes (1+1+1+pad+6×float)
+                manualSize = struct.calcsize(self.mRfReceiveFormatManual)
+                autoSize = struct.calcsize(self.mRfReceiveFormatAuto)
 
-                # Always forward motor commands to MotorManager as heartbeat
-                motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
-                self.mOutgoingQueue.put(motorModeCommand)
-
-                if not self.mCurrentMotorMode:
-                    # Manual mode: roll, pitch, yaw
-                    self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw = struct.unpack('fff', received[3:15])
+                if length == manualSize:
+                    self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw = struct.unpack(self.mRfReceiveFormatManual, received)
 
                     self.mLogger.debug('Manual mode packet')
                     self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
                     self.mLogger.debug('Roll: %.4f', self.mCurrentRoll)
                     self.mLogger.debug('Pitch: %.4f', self.mCurrentPitch)
                     self.mLogger.debug('Yaw: %.4f', self.mCurrentYaw)
-                else:
-                    # Auto mode: raw accel + gyro (x, y, z)
-                    self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack('ffffff', received[3:27])
+                elif length == autoSize:
+                    self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveFormatAuto, received)
 
                     self.mLogger.debug('Auto mode packet')
                     self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
@@ -140,6 +137,13 @@ class RfManager(threading.Thread):
                     self.mLogger.debug('Y Gyroscope: %.4f', self.mCurrentGyroY)
                     self.mLogger.debug('Z Acceleration: %.4f', self.mCurrentAccelZ)
                     self.mLogger.debug('Z Gyroscope: %.4f', self.mCurrentGyroZ)
+                else:
+                    self.mLogger.error('RfReceive unexpected packet length: %d bytes', length)
+                    raise ValueError('unexpected packet length: %d' % length)
+
+                # Always forward motor commands to MotorManager as heartbeat
+                motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
+                self.mOutgoingQueue.put(motorModeCommand)
 
                 self.mEventTimer.mark('rf_rx')
             except Exception as e:

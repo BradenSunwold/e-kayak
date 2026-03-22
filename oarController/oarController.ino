@@ -407,6 +407,7 @@ static void ButtonInputTask( void *pvParameters )
       else if (c == 'd') {
         Serial.println("MOCK: DOUBLE");
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
+        gAutoMode = currButtonState.fAutoMode;   // Update IMU task immediately, don't wait for queue chain
         xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
       }
     }
@@ -451,6 +452,7 @@ static void ButtonInputTask( void *pvParameters )
 
         // Update the current state
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
+        gAutoMode = currButtonState.fAutoMode;   // Update IMU task immediately, don't wait for queue chain
       }
       // Single button press = 2 state changes (on / off)
       else if(buttonStateChangeCount > 1)
@@ -474,6 +476,7 @@ static void ButtonInputTask( void *pvParameters )
       {
         currButtonState.fSpeed = 0;
         currButtonState.fAutoMode = false;
+        gAutoMode = false;
       }
 
       // Send current state to output proceesor

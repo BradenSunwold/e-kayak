@@ -13,6 +13,7 @@
 // Global flags
 bool gMotorFaultFlag = false;
 bool gComsTimeoutFlag = true;   // Initialize to true on boot until RF modules connect
+volatile bool gAutoMode = false;
 
 // Define rf24 radio
 const int rf24CE = 6;
@@ -117,24 +118,29 @@ bool gImuTimeout = false;
 
 
 //######################** Support functions ****************************//
-void SetImuReports()
+void SetImuReports(bool autoMode)
 {
-  long reportIntervalUs = 20000;    // Setting to 39 creates average output rate of 50Hz when sampling all three reports at ~66Hz for some reason
+  long reportIntervalUs = 20000;    // 50 Hz single-report rate
 
-  Serial.println("Setting desired reports");
-  if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, reportIntervalUs)) 
+  Serial.print("Setting IMU reports for mode: ");
+  Serial.println(autoMode ? "AUTO" : "MANUAL");
+
+  if (autoMode)
   {
-    Serial.println("Could not enable stabilized remote vector");
+    // Auto mode: raw accel + gyro only — disable fused orientation
+    bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 0);
+    if (!bno08x.enableReport(SH2_ACCELEROMETER, reportIntervalUs))
+      Serial.println("Could not enable accelerometer");
+    if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, reportIntervalUs))
+      Serial.println("Could not enable gyroscope");
   }
-
-  if (!bno08x.enableReport(SH2_ACCELEROMETER, reportIntervalUs)) 
+  else
   {
-    Serial.println("Could not enable accelerometer");
-  }
-
-  if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, reportIntervalUs)) 
-  {
-    Serial.println("Could not enable gyroscope");
+    // Manual mode: fused orientation only — disable raw sensors
+    if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, reportIntervalUs))
+      Serial.println("Could not enable stabilized rotation vector");
+    bno08x.enableReport(SH2_ACCELEROMETER, 0);
+    bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, 0);
   }
 }
 
@@ -251,7 +257,10 @@ static void ReadImuTask( void *pvParameters )
   // Flags to track if we have a full set of reports to send out yet
   bool fusedDataFreshFlag = false;
   bool accelDataFreshFlag = false;
-  bool gyroDataFreshFlag = false;  
+  bool gyroDataFreshFlag = false;
+
+  // Local copy of mode — used to detect transitions and reconfigure IMU
+  bool localAutoMode = false;
 
   uint32_t imuReadTimeBegin = 0;
   uint32_t imuReadTimeEnd = 0;
@@ -268,11 +277,22 @@ static void ReadImuTask( void *pvParameters )
 
        xTimerReset(imuWatchdogTimer, 0);
 
+      // Detect mode change and reconfigure IMU reports
+      if (gAutoMode != localAutoMode)
+      {
+        localAutoMode = gAutoMode;
+        SetImuReports(localAutoMode);
+        // Clear stale data from the previous mode
+        fusedDataFreshFlag = false;
+        accelDataFreshFlag = false;
+        gyroDataFreshFlag = false;
+      }
+
       // Check for IMU reset
-      if (bno08x.wasReset() || gImuTimeout) 
+      if (bno08x.wasReset() || gImuTimeout)
       {
         Serial.print("sensor was reset ");
-        SetImuReports();
+        SetImuReports(localAutoMode);
         gImuTimeout = false;
       }
 
@@ -282,10 +302,10 @@ static void ReadImuTask( void *pvParameters )
         // Serial.println("Tok");
         // Serial.println("AHRS Read");
         // Check for IMU reset
-        if (bno08x.wasReset()) 
+        if (bno08x.wasReset())
         {
           Serial.print("sensor was reset ");
-          SetImuReports();
+          SetImuReports(localAutoMode);
         }
         
         switch (sensorData.sensorId) 
@@ -323,7 +343,12 @@ static void ReadImuTask( void *pvParameters )
         // Serial.println(imuReadTime);
       }
 
-      if(fusedDataFreshFlag && accelDataFreshFlag && gyroDataFreshFlag)
+      // In manual mode only fused orientation is needed; in auto mode only accel + gyro
+      bool dataReady = localAutoMode
+        ? (accelDataFreshFlag && gyroDataFreshFlag)
+        : fusedDataFreshFlag;
+
+      if (dataReady)
       {
         xQueueOverwrite(imuDataQueue, (void*)&fullImuDataSet);
 
@@ -691,6 +716,7 @@ static void ProcessOutputsTask( void *pvParameters )
       {
         // Toggle autoMode
         autoMode = paddleCmdMsg.fAutoMode;
+        gAutoMode = autoMode;   // Signal ReadImuTask to reconfigure IMU reports
 
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
@@ -1236,7 +1262,7 @@ void setup()
     }
   }
   Serial.println("BNO08x Found!");
-  SetImuReports();
+  SetImuReports(gAutoMode);
 
   // SETUP NEOPIXELS
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)

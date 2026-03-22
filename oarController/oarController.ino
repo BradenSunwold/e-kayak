@@ -11,8 +11,8 @@
 #include "TaskMetaData.hpp"
 
 // Global flags
-bool gMotorFaultFlag = false;
-bool gComsTimeoutFlag = true;   // Initialize to true on boot until RF modules connect
+volatile bool gMotorFaultFlag = false;
+volatile bool gComsTimeoutFlag = true;   // Initialize to true on boot until RF modules connect
 volatile bool gAutoMode = false;
 
 // Define rf24 radio
@@ -22,15 +22,11 @@ RF24 radio(rf24CE, rf24CSN, 4000000);
 // const byte address[6] = "2Node";
 uint8_t address[][6] = { "1Node", "2Node" };
 
-// Define mutex for sharing radio resource between Rx and Tx threads
-SemaphoreHandle_t radioSemaphore = NULL;
-
 // Define BNO IMU
 #define BNO08X_CS 10
 #define BNO08X_INT 18
 #define BNO08X_RESET 15
 Adafruit_BNO08x  bno08x(-1);
-sh2_SensorValue_t sensorValue;
 SemaphoreHandle_t imuSem;
 
 // #define PIXEL_PIN 10
@@ -113,7 +109,7 @@ typedef struct
 std::function<void(int, uint32_t*)> GaugeFrameGenerator(float speedPercentage, float batteryPercentage);
 std::function<void(int, uint32_t*)> StartupFrameGenerator(const uint32_t* leftHalfColors, const uint32_t* rightHalfColors);
 TimerHandle_t imuWatchdogTimer;
-bool gImuTimeout = false;
+volatile bool gImuTimeout = false;
 
 
 
@@ -171,7 +167,6 @@ void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotationalVector, ImuDataType
 // Task globals
 // Initialize global queues
 size_t msgQueueLength = 10;
-static QueueHandle_t rfInMsgQueue;
 static QueueHandle_t imuDataQueue;
 static QueueHandle_t kayakStatusQueue;
 static QueueHandle_t currentStateQueue;
@@ -262,18 +257,12 @@ static void ReadImuTask( void *pvParameters )
   // Local copy of mode — used to detect transitions and reconfigure IMU
   bool localAutoMode = false;
 
-  uint32_t imuReadTimeBegin = 0;
-  uint32_t imuReadTimeEnd = 0;
-
   while(1)
   {
     if (xSemaphoreTake(imuSem, portMAX_DELAY) == pdTRUE)
     {
       readImuMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
       readImuMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
-
-      // Serial.println("Tik");
-      // imuReadTimeBegin = xTaskGetTickCount();
 
        xTimerReset(imuWatchdogTimer, 0);
 
@@ -337,10 +326,6 @@ static void ReadImuTask( void *pvParameters )
             Serial.println("Nothing recieved from IMU");
         }
 
-        // imuReadTimeEnd = xTaskGetTickCount();
-        // uint32_t imuReadTime = imuReadTimeEnd - imuReadTimeBegin;
-
-        // Serial.println(imuReadTime);
       }
 
       // In manual mode only fused orientation is needed; in auto mode only accel + gyro
@@ -482,8 +467,9 @@ static void ButtonInputTask( void *pvParameters )
       // Send current state to output proceesor
       xQueueSend(currentStateQueue, (void *)&currButtonState, 1);
 
-      // Reset local flags
+      // Reset local flags and advance window so block only fires 300ms after next button event
       buttonStateChangeCount = 0;
+      doubleClickTimeInMs = xTaskGetTickCount() / portTICK_PERIOD_MS;
     }
 
     buttonInputMetaData.GetExecutionTimer().Stop();
@@ -510,7 +496,6 @@ static void ProcessOutputsTask( void *pvParameters )
   LedMap_t ledMsg;
 
   float kayakBatteryPercentage = 26;
-  float oarbatteryVolt = 4.2;
   float totalBatteryPercentageReport = 100;
   float prevTotalBatteryPercentage = 99;    // Set prev percentage 99 to force an animation update
 
@@ -763,11 +748,10 @@ static void ProcessOutputsTask( void *pvParameters )
 static void LedPixelUpdaterTask( void *pvParameters )
 {
   // Default annimation to connecting
-  LedMap_t pixelMap;
+  LedMap_t pixelMap = {};
 
-  // Mechanism to track when next annimation update should be  
-  volatile TickType_t currPixelTimeout = xTaskGetTickCount();
-  volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);  
+  // Mechanism to track when next annimation update should be
+  volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);
 
   volatile int cycleCount = 0;    // Counter to track frame cycles
   
@@ -809,21 +793,21 @@ static void LedPixelUpdaterTask( void *pvParameters )
       }
     }
 
-    // Update strip if time 
+    // Update strip if time
     uint32_t frameBuffer[LED_COUNT];
-    if(currPixelTimeout = xTaskGetTickCount() >= nextPixelTimeout)
+    if(xTaskGetTickCount() >= nextPixelTimeout)
     {
-      // If frame generator loaded, generate next color buffer frame
+      // If frame generator loaded, generate and push next frame
       if (pixelMap.fFrameGenerator)
       {
         pixelMap.fFrameGenerator(cycleCount, frameBuffer);
-      }
 
-      for (int i = 0; i < strip.numPixels(); i++) 
-      {
-        strip.setPixelColor(i, frameBuffer[i]);
+        for (int i = 0; i < strip.numPixels(); i++)
+        {
+          strip.setPixelColor(i, frameBuffer[i]);
+        }
+        strip.show();
       }
-      strip.show();
 
       nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);  // Reset next annimation timeout
       cycleCount++;
@@ -998,7 +982,7 @@ static void RfRadioTask( void *pvParameters )
     // Rx data twice as slow as outgoing data - down sample for Rx messages
     if(rxDownSampleCounter >= rxDownSample - 1)
     {
-      if (radio.available()) 
+      if (radio.available())
       {
         uint8_t readLength = radio.getDynamicPayloadSize();
         // Store incoming data to local buffer
@@ -1011,9 +995,14 @@ static void RfRadioTask( void *pvParameters )
         // Store relevant data to queue for output processing
         xQueueSend(kayakStatusQueue, (void *)&incomingData, 1);
       }
+      rxDownSampleCounter = 0;
+    }
+    else
+    {
+      rxDownSampleCounter++;
     }
 
-        // Check on coms watchdog
+    // Check on coms watchdog
     if(((static_cast<double>(xTaskGetTickCount()) / static_cast<double>(portTICK_PERIOD_MS)) - 
                       (static_cast<double>(lastReceivedMsgTimeInTicks) / static_cast<double>(portTICK_PERIOD_MS))) > comsDroppedTimeInMs || !firstMessageReceived)
     {
@@ -1026,8 +1015,7 @@ static void RfRadioTask( void *pvParameters )
       gComsTimeoutFlag = false;
     }
     
-    rxDownSampleCounter++;
-    // rfRadioMetaData.GetExecutionTimer().Stop(); 
+    // rfRadioMetaData.GetExecutionTimer().Stop();
 
     myDelayMs(gRfRadioTaskRateInMs);   // execute task at 20Hz
 
@@ -1273,7 +1261,6 @@ void setup()
   strip.setBrightness(45); // Set BRIGHTNESS to about 1/5 (max = 255)
 
   // Create queues
-  rfInMsgQueue = xQueueCreate(msgQueueLength, sizeof(PaddleCmdMsg_t));
   imuDataQueue = xQueueCreate(1, sizeof(FullImuDataSet_t));                 // Only care about most up to date IMU data
   kayakStatusQueue = xQueueCreate(msgQueueLength, sizeof(KayakFeedbackMsg_t));
   currentStateQueue = xQueueCreate(msgQueueLength, sizeof(PaddleCmdMsg_t));
@@ -1297,7 +1284,7 @@ void setup()
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 136, NULL, tskIDLE_PRIORITY + 8, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
-  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 112, NULL, tskIDLE_PRIORITY + 1, &Handle_LedPixelUpdaterTester);
+  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 112, NULL, tskIDLE_PRIORITY + 1, &Handle_DumpTaskMetaData);
   //  xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
 
   // Create watchdog timer (500 ms period, auto-reload)
@@ -1381,7 +1368,7 @@ void PulseFrameGeneratorGreen(int index, uint32_t* outputColorBuffer)
 
 void PulseFrameGeneratorBlue(int index, uint32_t* outputColorBuffer)
 {
-  // Set default color to green
+  // Set default color to blue/white
   uint8_t red = 120;
   uint8_t green = 120;
   uint8_t blue = 255; 

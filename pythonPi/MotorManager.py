@@ -94,7 +94,6 @@ class MotorManager(threading.Thread):
         self.mOarComsLossTimeout = self.mConfigurator['oarComsLossTimeoutInMilliseconds']
         self.mStartupReversalTimeout = self.mConfigurator['startupReverseTimeInMilliseconds']
         self.mStartupLatched = True
-        self.mStartupTime = time.time()
         self.mMotorPolePairs = self.mConfigurator['motorPolePairs']
         self.mFaultConfig = self.mConfigurator['faultConfig']
 
@@ -118,12 +117,14 @@ class MotorManager(threading.Thread):
         GPIO.setup(self.mVescEnablePin, GPIO.OUT)
         GPIO.output(self.mVescEnablePin, True)
         self.mLogger.info('VESC enabled on GPIO %s', self.mVescEnablePin)
+        time.sleep(4)   
 
         # Shutdown flag
         self.mShutdownRequested = False
 
         # Init serial communication
         self.mSerial = serial.Serial("/dev/ttyS0", 115200, timeout=0.05)
+        self.mStartupTime = time.time()
 
 
     def _DetectFault(self, faultCode):
@@ -306,6 +307,7 @@ class MotorManager(threading.Thread):
             self.mRpm = (self.mSpeedSettingToRpmMap[1] / 100) * self.mMaxRpms * -1
             if(time.time() - self.mStartupTime > (self.mStartupReversalTimeout / 1000)) :
                 self.mStartupLatched = False
+                self.mLastVescResponseTime = time.time()
                 self.mLogger.info('Exiting Startup Reversal')
 
         # Send RPM command to the motor
@@ -363,15 +365,21 @@ class MotorManager(threading.Thread):
             except Exception as e:
                 self.mLogger.error('ReadMotor exception: %s', e)
 
-        # Fault state machine always runs regardless of VESC response
-        self._UpdateFaultState(vescFaultCode, gotVescResponse)
+        # Skip fault detection during startup reversal - VESC may not respond yet
+        if not self.mStartupLatched:
+            self._UpdateFaultState(vescFaultCode, gotVescResponse)
 
         self.mNextMotorReadTime += self.mMotorReadInterval
         self.mScheduler.enterabs(self.mNextMotorReadTime, 1, self.ReadMotor)
 
     def StartScheduler(self) :
-        # Initialize absolute schedule times
+        # Reset timeout baselines so VESC boot delay doesn't trigger false coms loss
         now = time.time()
+        self.mLastVescResponseTime = now
+        self.mLastOarMessageTime = now
+        self.mStartupTime = now
+
+        # Initialize absolute schedule times
         self.mNextCommandReadTime = now
         self.mNextMotorWriteTime = now
         self.mNextMotorReadTime = now

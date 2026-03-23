@@ -17,9 +17,11 @@ ExecutionTimer::ExecutionTimer(std::function<void(uint32_t)> callback)
 
 ExecutionTimer::~ExecutionTimer()
 {
-  uint32_t currentExecutionTimeInTicks = xTaskGetTickCount() - mPreviousTimeInTicks;
-
-  mCallback(currentExecutionTimeInTicks);
+  if (mCallback)
+  {
+    uint32_t currentExecutionTimeInTicks = xTaskGetTickCount() - mPreviousTimeInTicks;
+    mCallback(currentExecutionTimeInTicks);
+  }
 }
 
 void ExecutionTimer::Start()
@@ -29,9 +31,11 @@ void ExecutionTimer::Start()
 
 void ExecutionTimer::Stop()
 {
-  uint32_t currentExecutionTimeInTicks = xTaskGetTickCount() - mPreviousTimeInTicks;
-
-  mCallback(currentExecutionTimeInTicks);
+  if (mCallback)
+  {
+    uint32_t currentExecutionTimeInTicks = xTaskGetTickCount() - mPreviousTimeInTicks;
+    mCallback(currentExecutionTimeInTicks);
+  }
 }
 
 

@@ -429,6 +429,8 @@ static void ButtonInputTask( void *pvParameters )
 
     if(((xTaskGetTickCount() / portTICK_PERIOD_MS) - doubleClickTimeInMs) > doubleClickDelayInMs)
     {
+      bool eventOccurred = false;
+
       // Double button press = 4 state changes (on / off, on / off)
       if(buttonStateChangeCount > 2)
       {
@@ -438,6 +440,7 @@ static void ButtonInputTask( void *pvParameters )
         // Update the current state
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
         gAutoMode = currButtonState.fAutoMode;   // Update IMU task immediately, don't wait for queue chain
+        eventOccurred = true;
       }
       // Single button press = 2 state changes (on / off)
       else if(buttonStateChangeCount > 1)
@@ -454,18 +457,27 @@ static void ButtonInputTask( void *pvParameters )
         {
           currButtonState.fSpeed++;
         }
+        eventOccurred = true;
       }
 
-      // If coms timeout or motor fault, latch all to defaults
+      // If coms timeout or motor fault, latch state to defaults unconditionally.
+      // Only send if the latch actually changed something, to avoid queue spam.
       if(gMotorFaultFlag || gComsTimeoutFlag)
       {
-        currButtonState.fSpeed = 0;
-        currButtonState.fAutoMode = false;
-        gAutoMode = false;
+        if(currButtonState.fSpeed != 0 || currButtonState.fAutoMode != false)
+        {
+          currButtonState.fSpeed = 0;
+          currButtonState.fAutoMode = false;
+          gAutoMode = false;
+          eventOccurred = true;
+        }
       }
 
-      // Send current state to output proceesor
-      xQueueSend(currentStateQueue, (void *)&currButtonState, 1);
+      // Only send to output processor when state actually changed
+      if(eventOccurred)
+      {
+        xQueueSend(currentStateQueue, (void *)&currButtonState, 1);
+      }
 
       // Reset local flags and advance window so block only fires 300ms after next button event
       buttonStateChangeCount = 0;
@@ -660,6 +672,7 @@ static void ProcessOutputsTask( void *pvParameters )
       oarBatteryVoltage /= 1024;     // convert to voltage
 
       float oarBatteryPercentage = (-114.3 * (oarBatteryVoltage * oarBatteryVoltage)) + (959.22 * oarBatteryVoltage) - 1909.5;
+      oarBatteryPercentage = 80.0;
       if(oarBatteryPercentage > 100)
       {
         oarBatteryPercentage = 100;
@@ -911,11 +924,13 @@ static void RfRadioTask( void *pvParameters )
   imuDataOut.fAddReportsVect.fZ.fAccel = 0.0;
   imuDataOut.fAddReportsVect.fZ.fGyro = 0.0;
 
-  manualMsg.fMessageIndex = 1;
+  uint8_t messageIndex = 0;
+
+  manualMsg.fMessageIndex = messageIndex;
   manualMsg.fOutputCmd = PaddleCmdOut;
   manualMsg.fOutputImuEuler = imuDataOut.fEulerData;
 
-  autoMsg.fMessageIndex = 1;
+  autoMsg.fMessageIndex = messageIndex;
   autoMsg.fOutputCmd = PaddleCmdOut;
   autoMsg.fOutputImuAddReports = imuDataOut.fAddReportsVect;
 
@@ -963,12 +978,15 @@ static void RfRadioTask( void *pvParameters )
       radio.stopListening();    // put radio in TX mode
 
       // Send single packet based on current mode
+      messageIndex++;
       if(PaddleCmdOut.fAutoMode)
       {
+        autoMsg.fMessageIndex = messageIndex;
         radio.write(&autoMsg, sizeof(autoMsg));
       }
       else
       {
+        manualMsg.fMessageIndex = messageIndex;
         radio.write(&manualMsg, sizeof(manualMsg));
       }
 

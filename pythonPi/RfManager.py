@@ -131,13 +131,24 @@ class RfManager(threading.Thread):
             self.mLogger.info('RfReceive heartbeat: calls=%d, packets=%d, txFails=%d',
                               self.mRxCallCount, self.mRxPacketCount, self.mTxFailCount)
 
+        tListen = time.time()
         self.mRadio.listen = True
+        tAvail = time.time()
+        if (tAvail - tListen) > 0.05:
+            self.mLogger.warning('RX listen=True took %.3fs', tAvail - tListen)
 
         has_payload, pipe_number = self.mRadio.available_pipe()
+        tAfterAvail = time.time()
+        if (tAfterAvail - tAvail) > 0.05:
+            self.mLogger.warning('RX available_pipe() took %.3fs', tAfterAvail - tAvail)
 
         if has_payload:
+            tRead = time.time()
             length = self.mRadio.getDynamicPayloadSize()
             received = self.mRadio.read(length)
+            readElapsed = time.time() - tRead
+            if readElapsed > 0.05:
+                self.mLogger.warning('RX read() took %.3fs (len=%d)', readElapsed, length)
 
             try:
                 # Use payload length to determine format (accounts for C struct padding)

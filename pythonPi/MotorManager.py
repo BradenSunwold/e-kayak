@@ -253,12 +253,18 @@ class MotorManager(threading.Thread):
     def ReadCommands(self) :
         if self.mShutdownRequested:
             return
-        # First, check if we have new data from the RF manager - manual oar mode
-        try :
-            newCommand = self.mIncomingQueue.get_nowait()
+        # Drain the queue and only use the latest command. The oar sends
+        # packets faster than ReadCommands runs, so the queue grows over time
+        # if we only read one message per call.
+        latestCommand = None
+        while True:
+            try:
+                latestCommand = self.mIncomingQueue.get_nowait()
+            except queue.Empty:
+                break
 
-            # Check what msg we got
-            tmpMode, tmpRpm = struct.unpack('?B', newCommand)
+        if latestCommand is not None:
+            tmpMode, tmpRpm = struct.unpack('?B', latestCommand)
 
             numberSpeeds = self.mConfigurator['numberOfSpeedSettings']
 
@@ -271,8 +277,7 @@ class MotorManager(threading.Thread):
                 self.mLogger.debug('Oar Speed Command: %s', self.mMotorSpeedManual)
             else :
                 self.mLogger.info("Received invalid motor commands")
-
-        except queue.Empty:
+        else:
             self.mLogger.debug("Command queue empty")
 
         # Read ML module - Empty for now

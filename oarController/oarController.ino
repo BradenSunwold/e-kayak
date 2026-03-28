@@ -10,6 +10,12 @@
 #include "LedPixelMaps.hpp"
 #include "TaskMetaData.hpp"
 
+// Guarded serial macros — prevent blocking when no USB host is connected.
+// On SAMD21, Serial (USB CDC) blocks once its internal buffer fills if no
+// host is draining it.  These macros skip the write entirely in that case.
+#define debugSerialPrint(...)    do { if (Serial) Serial.print(__VA_ARGS__);   } while(0)
+#define debugSerialPrintln(...)  do { if (Serial) Serial.println(__VA_ARGS__); } while(0)
+
 // Global flags
 volatile bool gMotorFaultFlag = false;
 volatile bool gComsTimeoutFlag = true;   // Initialize to true on boot until RF modules connect
@@ -118,23 +124,23 @@ void SetImuReports(bool autoMode)
 {
   long reportIntervalUs = 20000;    // 50 Hz single-report rate
 
-  Serial.print("Setting IMU reports for mode: ");
-  Serial.println(autoMode ? "AUTO" : "MANUAL");
+  debugSerialPrint("Setting IMU reports for mode: ");
+  debugSerialPrintln(autoMode ? "AUTO" : "MANUAL");
 
   if (autoMode)
   {
     // Auto mode: raw accel + gyro only — disable fused orientation
     bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 0);
     if (!bno08x.enableReport(SH2_ACCELEROMETER, reportIntervalUs))
-      Serial.println("Could not enable accelerometer");
+      debugSerialPrintln("Could not enable accelerometer");
     if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, reportIntervalUs))
-      Serial.println("Could not enable gyroscope");
+      debugSerialPrintln("Could not enable gyroscope");
   }
   else
   {
     // Manual mode: fused orientation only — disable raw sensors
     if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, reportIntervalUs))
-      Serial.println("Could not enable stabilized rotation vector");
+      debugSerialPrintln("Could not enable stabilized rotation vector");
     bno08x.enableReport(SH2_ACCELEROMETER, 0);
     bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, 0);
   }
@@ -280,7 +286,7 @@ static void ReadImuTask( void *pvParameters )
       // Check for IMU reset
       if (bno08x.wasReset() || gImuTimeout)
       {
-        Serial.print("sensor was reset ");
+        debugSerialPrint("sensor was reset ");
         SetImuReports(localAutoMode);
         gImuTimeout = false;
       }
@@ -288,12 +294,12 @@ static void ReadImuTask( void *pvParameters )
       // Read incoming sensor data
       while(bno08x.getSensorEvent(&sensorData))
       {
-        // Serial.println("Tok");
-        // Serial.println("AHRS Read");
+        // debugSerialPrintln("Tok");
+        // debugSerialPrintln("AHRS Read");
         // Check for IMU reset
         if (bno08x.wasReset())
         {
-          Serial.print("sensor was reset ");
+          debugSerialPrint("sensor was reset ");
           SetImuReports(localAutoMode);
         }
         
@@ -303,12 +309,12 @@ static void ReadImuTask( void *pvParameters )
             quaternionToEulerRV(&sensorData.un.arvrStabilizedRV, &fullImuDataSet.fEulerData, true);
             fusedDataFreshFlag = true;
 
-            // Serial.print("Pitch: ");
-            // Serial.println(fullImuDataSet.fEulerData.fPitch);
-            // Serial.println("Roll: ");
-            // Serial.println(fullImuDataSet.fEulerData.fRoll);
-            // Serial.print("Yaw: ");
-            // Serial.println(fullImuDataSet.fEulerData.fYaw);
+            // debugSerialPrint("Pitch: ");
+            // debugSerialPrintln(fullImuDataSet.fEulerData.fPitch);
+            // debugSerialPrintln("Roll: ");
+            // debugSerialPrintln(fullImuDataSet.fEulerData.fRoll);
+            // debugSerialPrint("Yaw: ");
+            // debugSerialPrintln(fullImuDataSet.fEulerData.fYaw);
             break;
           case SH2_ACCELEROMETER :
             fullImuDataSet.fAddReportsVect.fX.fAccel = sensorData.un.accelerometer.x;
@@ -323,7 +329,7 @@ static void ReadImuTask( void *pvParameters )
             gyroDataFreshFlag = true;
             break;
           default : 
-            Serial.println("Nothing recieved from IMU");
+            debugSerialPrintln("Nothing recieved from IMU");
         }
 
       }
@@ -349,7 +355,7 @@ static void ReadImuTask( void *pvParameters )
     }
   }
   
-  Serial.println("Task Monitor: Deleting");
+  debugSerialPrintln("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -381,7 +387,7 @@ static void ButtonInputTask( void *pvParameters )
       char c = Serial.read(); // Non-blocking read of one character
 
       if (c == 's') {
-        Serial.println("MOCK: SINGLE");
+        debugSerialPrintln("MOCK: SINGLE");
         if (currButtonState.fSpeed == 3) {
           currButtonState.fSpeed = 0;
         } else {
@@ -390,7 +396,7 @@ static void ButtonInputTask( void *pvParameters )
         xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
       }
       else if (c == 'd') {
-        Serial.println("MOCK: DOUBLE");
+        debugSerialPrintln("MOCK: DOUBLE");
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
         gAutoMode = currButtonState.fAutoMode;   // Update IMU task immediately, don't wait for queue chain
         xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
@@ -435,7 +441,7 @@ static void ButtonInputTask( void *pvParameters )
       if(buttonStateChangeCount > 2)
       {
         // Found double click
-        Serial.println("DOUBLE");
+        debugSerialPrintln("DOUBLE");
 
         // Update the current state
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
@@ -446,7 +452,7 @@ static void ButtonInputTask( void *pvParameters )
       else if(buttonStateChangeCount > 1)
       {
         // Found single click
-        Serial.println("SINGLE");
+        debugSerialPrintln("SINGLE");
 
         // Update the current state
         if(currButtonState.fSpeed == 3)
@@ -489,7 +495,7 @@ static void ButtonInputTask( void *pvParameters )
     myDelayMs(gButtonInTaskRateInMs);   // execute task at 20Hz
   }
 
-  Serial.println("Task Monitor: Deleting");
+  debugSerialPrintln("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -550,7 +556,7 @@ static void ProcessOutputsTask( void *pvParameters )
         .fNumCyclesBlock = 1,
         .fNumFrames = LED_COUNT
       };
-      Serial.println("Comms Loss");
+      debugSerialPrintln("Comms Loss");
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
     }
     else
@@ -594,7 +600,7 @@ static void ProcessOutputsTask( void *pvParameters )
           case eUnknownFault :
           case eOverTemp :
           case eVescComsLoss :                                  // faults take priority
-            Serial.println("FAULT");
+            debugSerialPrintln("FAULT");
             gMotorFaultFlag = true;
 
             // Set error animation
@@ -656,7 +662,7 @@ static void ProcessOutputsTask( void *pvParameters )
             break;
           
           default :
-            Serial.println("Did not recieve valid RF message");
+            debugSerialPrintln("Did not recieve valid RF message");
             break;
         }
       }
@@ -672,7 +678,7 @@ static void ProcessOutputsTask( void *pvParameters )
       oarBatteryVoltage /= 1024;     // convert to voltage
 
       float oarBatteryPercentage = (-114.3 * (oarBatteryVoltage * oarBatteryVoltage)) + (959.22 * oarBatteryVoltage) - 1909.5;
-      oarBatteryPercentage = 80.0;
+      // oarBatteryPercentage = 80.0;
       if(oarBatteryPercentage > 100)
       {
         oarBatteryPercentage = 100;
@@ -703,9 +709,9 @@ static void ProcessOutputsTask( void *pvParameters )
         .fNumFrames = LED_COUNT
       };
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-      Serial.println("Sending new battery status");
-      Serial.println(speedPercentageReported);
-      Serial.println(totalBatteryPercentageReport);
+      debugSerialPrintln("Sending new battery status");
+      debugSerialPrintln(speedPercentageReported);
+      debugSerialPrintln(totalBatteryPercentageReport);
 
       prevTotalBatteryPercentage = totalBatteryPercentageReport;  // Update previous battery percentate
     }
@@ -729,8 +735,8 @@ static void ProcessOutputsTask( void *pvParameters )
             .fNumCyclesBlock = 2,
             .fNumFrames = LED_COUNT
           };
-          Serial.print("Mode: ");
-          Serial.println(paddleCmdMsg.fAutoMode);
+          debugSerialPrint("Mode: ");
+          debugSerialPrintln(paddleCmdMsg.fAutoMode);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
           xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
         }
@@ -754,7 +760,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
   }
 
-  Serial.println("Task Monitor: Deleting");
+  debugSerialPrintln("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -774,10 +780,10 @@ static void LedPixelUpdaterTask( void *pvParameters )
     ledDriverMetaData.GetMetaData().UpdateTimestamp();   // Meta data tracks rate of task call
     ledDriverMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
 
-    // Serial.print("Cycle Count: ");
-    // Serial.println(cycleCount);
-    // Serial.print("Delay count: ");
-    // Serial.println(delayCount);    
+    // debugSerialPrint("Cycle Count: ");
+    // debugSerialPrintln(cycleCount);
+    // debugSerialPrint("Delay count: ");
+    // debugSerialPrintln(delayCount);    
     if(pixelMap.fNumCyclesBlock <= 0)
     {
       // Only read in next annimation if pixel map unblocked
@@ -792,7 +798,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
     // Update Cycle counters
     if(cycleCount >= pixelMap.fNumFrames)
     {
-      // Serial.println(cycleCount);
+      // debugSerialPrintln(cycleCount);
       cycleCount = 0;
 
       // Check if annimation is done blocking
@@ -832,7 +838,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
   }
 
-  Serial.println("Task Monitor: Deleting");
+  debugSerialPrintln("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -856,7 +862,7 @@ static void LedPixelUpdaterTester( void *pvParameters )
     // If ready for next set of pixel map transitions
     if(xTaskGetTickCount() >= nextSetLoadTimeout)
     {
-      // Serial.println("Set Insert");
+      // debugSerialPrintln("Set Insert");
       insertFlag = true;
 
       // Reset load timeout
@@ -869,7 +875,7 @@ static void LedPixelUpdaterTester( void *pvParameters )
       if(xTaskGetTickCount() >= nextQueueInsertTimeout)
       {
         // Insert
-        // Serial.println("Queue Insert");
+        // debugSerialPrintln("Queue Insert");
         xQueueSend(ledPixelMapQueue, (void *)&pixelMapList[index], 1);
 
         index++;
@@ -887,17 +893,17 @@ static void LedPixelUpdaterTester( void *pvParameters )
     }
 
     // uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
-    // Serial.println(uxHighWaterMark);
+    // debugSerialPrintln(uxHighWaterMark);
     
     // count = 0;
 
     // beginTime = millis();
     myDelayMs(gLedTesterTaskRateInMs);   // execute task at 10 Hz
     // taskTime = millis() - beginTime;
-    // Serial.println(taskTime);
+    // debugSerialPrintln(taskTime);
   }
 
-  Serial.println("Task Monitor: Deleting");
+  debugSerialPrintln("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -1039,7 +1045,7 @@ static void RfRadioTask( void *pvParameters )
 
   }
 
-  Serial.println("Task Monitor: Deleting");
+  debugSerialPrintln("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -1057,166 +1063,166 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     // Print average timings
 
     // Print read IMU diag
-    Serial.print("ReadImu average call rate: ");
-    Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("ReadImu std dev: ");
-    Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
-    Serial.println("ms");
-    Serial.print("ReadImu average execution rate: ");
-    Serial.print(readImuMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("ReadImu stack use: ");
-    Serial.println(readImuMetaData.GetStackUsageHighWaterMark());
-    Serial.println();
+    debugSerialPrint("ReadImu average call rate: ");
+    debugSerialPrint(readImuMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("ReadImu std dev: ");
+    debugSerialPrint(readImuMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("ReadImu average execution rate: ");
+    debugSerialPrint(readImuMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("ReadImu stack use: ");
+    debugSerialPrintln(readImuMetaData.GetStackUsageHighWaterMark());
+    debugSerialPrintln();
 
     // Print output processor diag
-    Serial.print("outProcessor average call rate: ");
-    Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("outProcessor std dev: ");
-    Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
-    Serial.println("ms");
-    Serial.print("outProcessor average execution rate: ");
-    Serial.print(processOutputsMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("outProcessor stack use: ");
-    Serial.println(processOutputsMetaData.GetStackUsageHighWaterMark());
-    Serial.println();
+    debugSerialPrint("outProcessor average call rate: ");
+    debugSerialPrint(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("outProcessor std dev: ");
+    debugSerialPrint(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("outProcessor average execution rate: ");
+    debugSerialPrint(processOutputsMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("outProcessor stack use: ");
+    debugSerialPrintln(processOutputsMetaData.GetStackUsageHighWaterMark());
+    debugSerialPrintln();
 
     // Print button input diag
-    Serial.print("buttonIn average call rate: ");
-    Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("buttonIn std dev: ");
-    Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
-    Serial.println("ms");
-    Serial.print("buttonIn average execution rate: ");
-    Serial.print(buttonInputMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("buttonIn stack use: ");
-    Serial.println(buttonInputMetaData.GetStackUsageHighWaterMark());
-    Serial.println();
+    debugSerialPrint("buttonIn average call rate: ");
+    debugSerialPrint(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("buttonIn std dev: ");
+    debugSerialPrint(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("buttonIn average execution rate: ");
+    debugSerialPrint(buttonInputMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("buttonIn stack use: ");
+    debugSerialPrintln(buttonInputMetaData.GetStackUsageHighWaterMark());
+    debugSerialPrintln();
 
     // Print write RF diag
-    Serial.print("Rf average call rate: ");
-    Serial.print(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("Rf std dev: ");
-    Serial.print(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
-    Serial.println("ms");
-    Serial.print("Rf average execution rate: ");
-    Serial.print(rfRadioMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("Rf stack use: ");
-    Serial.println(rfRadioMetaData.GetStackUsageHighWaterMark());
-    Serial.println();
+    debugSerialPrint("Rf average call rate: ");
+    debugSerialPrint(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("Rf std dev: ");
+    debugSerialPrint(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("Rf average execution rate: ");
+    debugSerialPrint(rfRadioMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("Rf stack use: ");
+    debugSerialPrintln(rfRadioMetaData.GetStackUsageHighWaterMark());
+    debugSerialPrintln();
 
     // Print Led driver diag
-    Serial.print("LedDriver average call rate: ");
-    Serial.print(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("LedDriver std dev: ");
-    Serial.print(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
-    Serial.println("ms");
-    Serial.print("LedDriver average execution rate: ");
-    Serial.print(ledDriverMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("LedDriver stack use: ");
-    Serial.println(ledDriverMetaData.GetStackUsageHighWaterMark());
-    Serial.println();
+    debugSerialPrint("LedDriver average call rate: ");
+    debugSerialPrint(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("LedDriver std dev: ");
+    debugSerialPrint(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("LedDriver average execution rate: ");
+    debugSerialPrint(ledDriverMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("LedDriver stack use: ");
+    debugSerialPrintln(ledDriverMetaData.GetStackUsageHighWaterMark());
+    debugSerialPrintln();
 
     // Print task diag dump diag
-    Serial.print("DiagDump average call rate: ");
-    Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("DiagDump std dev: ");
-    Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
-    Serial.println("ms");
-    Serial.print("DiagDump average execution rate: ");
-    Serial.print(diagTaskMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
-    Serial.println("ms");
-    Serial.print("DiagDump stack use: ");
-    Serial.println(diagTaskMetaData.GetStackUsageHighWaterMark());
-    Serial.println();
+    debugSerialPrint("DiagDump average call rate: ");
+    debugSerialPrint(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("DiagDump std dev: ");
+    debugSerialPrint(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetStdDeviationInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("DiagDump average execution rate: ");
+    debugSerialPrint(diagTaskMetaData.GetTaskExecutionTimeStats().GetAverageTimeInMs());
+    debugSerialPrintln("ms");
+    debugSerialPrint("DiagDump stack use: ");
+    debugSerialPrintln(diagTaskMetaData.GetStackUsageHighWaterMark());
+    debugSerialPrintln();
 
-    // Serial.println();
+    // debugSerialPrintln();
 
 
     // // Print out worst case timing
 
     // // Print read IMU diag
-    // Serial.print("ReadImu max call rate: ");
-    // Serial.print(readImuMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("ReadImu max execution rate: ");
-    // Serial.print(readImuMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("ReadImu stack use: ");
-    // Serial.println(readImuMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
+    // debugSerialPrint("ReadImu max call rate: ");
+    // debugSerialPrint(readImuMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("ReadImu max execution rate: ");
+    // debugSerialPrint(readImuMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("ReadImu stack use: ");
+    // debugSerialPrintln(readImuMetaData.GetStackUsageHighWaterMark());
+    // debugSerialPrintln();
 
     // // Print output processor diag
-    // Serial.print("outProcessor max call rate: ");
-    // Serial.print(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("outProcessor max execution rate: ");
-    // Serial.print(processOutputsMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("outProcessor stack use: ");
-    // Serial.println(processOutputsMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
+    // debugSerialPrint("outProcessor max call rate: ");
+    // debugSerialPrint(processOutputsMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("outProcessor max execution rate: ");
+    // debugSerialPrint(processOutputsMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("outProcessor stack use: ");
+    // debugSerialPrintln(processOutputsMetaData.GetStackUsageHighWaterMark());
+    // debugSerialPrintln();
 
     // // Print button input diag
-    // Serial.print("buttonIn max call rate: ");
-    // Serial.print(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("buttonIn max execution rate: ");
-    // Serial.print(buttonInputMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("buttonIn stack use: ");
-    // Serial.println(buttonInputMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
+    // debugSerialPrint("buttonIn max call rate: ");
+    // debugSerialPrint(buttonInputMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("buttonIn max execution rate: ");
+    // debugSerialPrint(buttonInputMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("buttonIn stack use: ");
+    // debugSerialPrintln(buttonInputMetaData.GetStackUsageHighWaterMark());
+    // debugSerialPrintln();
 
     // // Print write RF diag
-    // Serial.print("Rf max call rate: ");
-    // Serial.print(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("Rf max execution rate: ");
-    // Serial.print(rfRadioMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("Rf stack use: ");
-    // Serial.println(rfRadioMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
+    // debugSerialPrint("Rf max call rate: ");
+    // debugSerialPrint(rfRadioMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("Rf max execution rate: ");
+    // debugSerialPrint(rfRadioMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("Rf stack use: ");
+    // debugSerialPrintln(rfRadioMetaData.GetStackUsageHighWaterMark());
+    // debugSerialPrintln();
 
     // // Print Led driver diag
-    // Serial.print("LedDriver max call rate: ");
-    // Serial.println(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
-    // Serial.print("LedDriver max execution rate: ");
-    // Serial.println(ledDriverMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
-    // Serial.print("LedDriver stack use: ");
-    // Serial.println(ledDriverMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
+    // debugSerialPrint("LedDriver max call rate: ");
+    // debugSerialPrintln(ledDriverMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // debugSerialPrint("LedDriver max execution rate: ");
+    // debugSerialPrintln(ledDriverMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // debugSerialPrint("LedDriver stack use: ");
+    // debugSerialPrintln(ledDriverMetaData.GetStackUsageHighWaterMark());
+    // debugSerialPrintln();
 
     // // Print task diag dump diag
-    // Serial.print("DiagDump max call rate: ");
-    // Serial.print(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("DiagDump max execution rate: ");
-    // Serial.print(diagTaskMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
-    // Serial.println("ms");
-    // Serial.print("DiagDump stack use: ");
-    // Serial.println(diagTaskMetaData.GetStackUsageHighWaterMark());
-    // Serial.println();
+    // debugSerialPrint("DiagDump max call rate: ");
+    // debugSerialPrint(diagTaskMetaData.GetMetaData().GetUpdateRateStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("DiagDump max execution rate: ");
+    // debugSerialPrint(diagTaskMetaData.GetTaskExecutionTimeStats().GetMaxTimeInMs());
+    // debugSerialPrintln("ms");
+    // debugSerialPrint("DiagDump stack use: ");
+    // debugSerialPrintln(diagTaskMetaData.GetStackUsageHighWaterMark());
+    // debugSerialPrintln();
 
-    Serial.println();
+    debugSerialPrintln();
 
     diagTaskMetaData.GetExecutionTimer().Stop(); 
 
     myDelayMs(gDiagDumpTaskRateInMs);   // execute task at .5Hz
   }
 
-  Serial.println("Task Monitor: Deleting");
+  debugSerialPrintln("Task Monitor: Deleting");
   vTaskDelete( NULL );
 }
 
@@ -1232,7 +1238,7 @@ void setup()
     delay(10);     // will pause until serial console opens
     serialResetCount++;
   }
-  Serial.println("Begin Setup");
+  debugSerialPrintln("Begin Setup");
 
   // SETUP RF24 RADIO
   radio.begin();
@@ -1251,7 +1257,7 @@ void setup()
   // SETUP BNO
   imuSem = xSemaphoreCreateBinary();
   if (imuSem == NULL) {
-    Serial.println("Failed to create semaphore!");
+    debugSerialPrintln("Failed to create semaphore!");
     while (1);
   }
 
@@ -1264,13 +1270,13 @@ void setup()
   Wire.setClock(400000);
   if (!bno08x.begin_I2C()) 
   {
-    Serial.println("Failed to find BNO08x chip");
+    debugSerialPrintln("Failed to find BNO08x chip");
     while (1) 
     {   
       delay(10); 
     }
   }
-  Serial.println("BNO08x Found!");
+  debugSerialPrintln("BNO08x Found!");
   SetImuReports(gAutoMode);
 
   // SETUP NEOPIXELS
@@ -1310,10 +1316,10 @@ void setup()
   xTimerStart(imuWatchdogTimer, 0);
   
 
-  Serial.println("");
-  Serial.println("******************************");
-  Serial.println("        Program start         ");
-  Serial.println("******************************");
+  debugSerialPrintln("");
+  debugSerialPrintln("******************************");
+  debugSerialPrintln("        Program start         ");
+  debugSerialPrintln("******************************");
   Serial.flush();
 
   // Start the RTOS, this function will never return and will schedule the tasks.
@@ -1323,7 +1329,7 @@ void setup()
   // should never get here
   while(1)
   {
-	  Serial.println("Scheduler Failed! \n");
+	  debugSerialPrintln("Scheduler Failed! \n");
 	  Serial.flush();
 	  delay(1000);
   }

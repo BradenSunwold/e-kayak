@@ -63,6 +63,12 @@ class RfManager(threading.Thread):
         # Shutdown flag
         self.mShutdownRequested = False
 
+        # Diagnostics
+        self.mRxCallCount = 0
+        self.mRxPacketCount = 0
+        self.mTxCallCount = 0
+        self.mTxFailCount = 0
+
     def shutdown(self):
         """Signal the RF manager to stop."""
         self.mLogger.info('RF shutdown requested')
@@ -92,7 +98,8 @@ class RfManager(threading.Thread):
                 self.mLogger.debug('RF sending data: %s', data)
 
                 if not result:
-                    self.mLogger.error("RF transmission failed or timed out")
+                    self.mTxFailCount += 1
+                    self.mLogger.error("RF TX failed (total fails: %d)", self.mTxFailCount)
 
         self.mRadio.listen = True
 
@@ -103,6 +110,11 @@ class RfManager(threading.Thread):
     def RfReceive(self):
         if self.mShutdownRequested:
             return
+        self.mRxCallCount += 1
+        if self.mRxCallCount % 100 == 0:
+            self.mLogger.info('RfReceive heartbeat: calls=%d, packets=%d, txFails=%d',
+                              self.mRxCallCount, self.mRxPacketCount, self.mTxFailCount)
+
         self.mRadio.listen = True
 
         has_payload, pipe_number = self.mRadio.available_pipe()
@@ -145,6 +157,7 @@ class RfManager(threading.Thread):
                 motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
                 self.mOutgoingQueue.put(motorModeCommand)
 
+                self.mRxPacketCount += 1
                 self.mEventTimer.mark('rf_rx')
             except Exception as e:
                 self.mLogger.error('RfReceive malformed packet (%d bytes): %s', length, e)

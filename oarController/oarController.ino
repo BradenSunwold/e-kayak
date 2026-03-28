@@ -600,7 +600,7 @@ static void ProcessOutputsTask( void *pvParameters )
           case eUnknownFault :
           case eOverTemp :
           case eVescComsLoss :                                  // faults take priority
-            debugSerialPrintln("FAULT");
+            // debugSerialPrintln("FAULT");
             gMotorFaultFlag = true;
 
             // Set error animation
@@ -709,9 +709,9 @@ static void ProcessOutputsTask( void *pvParameters )
         .fNumFrames = LED_COUNT
       };
       xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-      debugSerialPrintln("Sending new battery status");
-      debugSerialPrintln(speedPercentageReported);
-      debugSerialPrintln(totalBatteryPercentageReport);
+      // debugSerialPrintln("Sending new battery status");
+      // debugSerialPrintln(speedPercentageReported);
+      // debugSerialPrintln(totalBatteryPercentageReport);
 
       prevTotalBatteryPercentage = totalBatteryPercentageReport;  // Update previous battery percentate
     }
@@ -979,6 +979,7 @@ static void RfRadioTask( void *pvParameters )
 
     if(newTxData)
     {
+      debugSerialPrintln("Tx");
       rfRadioMetaData.GetExecutionTimer().Start();       // Execution timer tracks task execution time
       // New data is available to send
       radio.stopListening();    // put radio in TX mode
@@ -1308,7 +1309,7 @@ void setup()
   xTaskCreate(LedPixelUpdaterTask, "Pixel updater", 136, NULL, tskIDLE_PRIORITY + 8, &Handle_LedPixelUpdaterTask);        // 928 bytes
 
   // Test tasks
-  xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 112, NULL, tskIDLE_PRIORITY + 1, &Handle_DumpTaskMetaData);
+  // xTaskCreate(DumpTaskMetaDataTask, "Diagnostics Dump", 112, NULL, tskIDLE_PRIORITY + 1, &Handle_DumpTaskMetaData);
   //  xTaskCreate(LedPixelUpdaterTester, "Pixel tester", 500, NULL, tskIDLE_PRIORITY + 5, &Handle_LedPixelUpdaterTester);
 
   // Create watchdog timer (500 ms period, auto-reload)

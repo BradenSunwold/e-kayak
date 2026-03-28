@@ -87,11 +87,18 @@ class RfManager(threading.Thread):
                 break
 
         if messages:
+            t0 = time.time()
             self.mRadio.listen = False
+            t1 = time.time()
+            if (t1 - t0) > 0.05:
+                self.mLogger.warning('listen=False took %.3fs', t1 - t0)
+
             for newCommand in messages:
                 status, data = struct.unpack('hf', newCommand)
                 payload = struct.pack('hf', status, data)
+                tWrite = time.time()
                 result = self.mRadio.write(payload)
+                writeElapsed = time.time() - tWrite
 
                 self.mEventTimer.mark('rf_tx')
                 self.mLogger.debug('RF sending status: %s', status)
@@ -99,9 +106,18 @@ class RfManager(threading.Thread):
 
                 if not result:
                     self.mTxFailCount += 1
-                    self.mLogger.error("RF TX failed (total fails: %d)", self.mTxFailCount)
+                    self.mLogger.error("RF TX failed (total fails: %d, write took %.3fs)", self.mTxFailCount, writeElapsed)
+                if writeElapsed > 0.05:
+                    self.mLogger.warning('radio.write() took %.3fs (result=%s)', writeElapsed, result)
 
+            t2 = time.time()
+            self.mLogger.debug('RfSend burst: %d msgs in %.3fs', len(messages), t2 - t0)
+
+        tListen = time.time()
         self.mRadio.listen = True
+        listenElapsed = time.time() - tListen
+        if listenElapsed > 0.05:
+            self.mLogger.warning('listen=True took %.3fs', listenElapsed)
 
         # Schedule next transmission
         self.mNextTxTime += self.mTxInterval

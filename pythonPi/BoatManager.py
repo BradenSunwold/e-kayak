@@ -2,6 +2,7 @@ import os
 import signal
 import yaml
 import logging
+import logging.handlers
 import queue
 from datetime import datetime
 
@@ -34,18 +35,29 @@ def main():
     rfLogPath = os.path.join(rfLogDir, f'rfLog_{timestamp}.log')
     motorLogPath = os.path.join(motorLogDir, f'motorLog_{timestamp}.log')
 
-    # Create logging handlers
+    # Create logging handlers using QueueHandler/QueueListener so file I/O
+    # happens in background threads and never blocks the RF or Motor schedulers.
+    logFormatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
     rfFileHandler = logging.FileHandler(rfLogPath)
     rfFileHandler.setLevel(logging.DEBUG)
+    rfFileHandler.setFormatter(logFormatter)
+    rfLogQueue = queue.Queue()
+    rfQueueHandler = logging.handlers.QueueHandler(rfLogQueue)
+    rfLogListener = logging.handlers.QueueListener(rfLogQueue, rfFileHandler, respect_handler_level=True)
+    loggerRf.addHandler(rfQueueHandler)
+
     motorFileHandler = logging.FileHandler(motorLogPath)
     motorFileHandler.setLevel(logging.DEBUG)
-
-    logFormatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    rfFileHandler.setFormatter(logFormatter)
     motorFileHandler.setFormatter(logFormatter)
+    motorLogQueue = queue.Queue()
+    motorQueueHandler = logging.handlers.QueueHandler(motorLogQueue)
+    motorLogListener = logging.handlers.QueueListener(motorLogQueue, motorFileHandler, respect_handler_level=True)
+    loggerMotor.addHandler(motorQueueHandler)
 
-    loggerRf.addHandler(rfFileHandler)
-    loggerMotor.addHandler(motorFileHandler)
+    # Start log listeners before manager threads
+    rfLogListener.start()
+    motorLogListener.start()
 
     # Create queues for thread comms
     motorToRfQueue = queue.Queue()
@@ -61,6 +73,8 @@ def main():
         logger.info('Shutdown signal received (signal %s)', signum)
         motorManager.shutdown()
         rfManager.shutdown()
+        rfLogListener.stop()
+        motorLogListener.stop()
 
     signal.signal(signal.SIGINT, shutdownHandler)
     signal.signal(signal.SIGTERM, shutdownHandler)

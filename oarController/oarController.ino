@@ -21,6 +21,12 @@ volatile bool gMotorFaultFlag = false;
 volatile bool gComsTimeoutFlag = true;   // Initialize to true on boot until RF modules connect
 volatile bool gAutoMode = false;
 
+// RF TX retry tracking
+volatile uint32_t gRfTxCount = 0;
+volatile uint32_t gRfTxFailCount = 0;    // Packets that failed all retries
+volatile uint32_t gRfRetryCount = 0;     // Packets that needed at least one retry
+volatile uint32_t gRfTotalRetries = 0;   // Sum of all retry attempts
+
 // Define rf24 radio
 const int rf24CE = 6;
 const int rf24CSN = 5;
@@ -995,15 +1001,27 @@ static void RfRadioTask( void *pvParameters )
 
       // Send single packet based on current mode
       messageIndex++;
+      bool txResult;
       if(PaddleCmdOut.fAutoMode)
       {
         autoMsg.fMessageIndex = messageIndex;
-        radio.write(&autoMsg, sizeof(autoMsg));
+        txResult = radio.write(&autoMsg, sizeof(autoMsg));
       }
       else
       {
         manualMsg.fMessageIndex = messageIndex;
-        radio.write(&manualMsg, sizeof(manualMsg));
+        txResult = radio.write(&manualMsg, sizeof(manualMsg));
+      }
+      if (!txResult) {
+        gRfTxFailCount++;
+      }
+
+      // Track retry stats
+      uint8_t retries = radio.getARC();
+      gRfTxCount++;
+      gRfTotalRetries += retries;
+      if (retries > 0) {
+        gRfRetryCount++;
       }
 
       radio.startListening();    // put radio in RX mode
@@ -1128,6 +1146,14 @@ static void DumpTaskMetaDataTask( void *pvParameters )
     debugSerialPrintln("ms");
     debugSerialPrint("Rf stack use: ");
     debugSerialPrintln(rfRadioMetaData.GetStackUsageHighWaterMark());
+    debugSerialPrint("Rf TX packets: ");
+    debugSerialPrintln(gRfTxCount);
+    debugSerialPrint("Rf TX failed packets: ");
+    debugSerialPrintln(gRfTxFailCount);
+    debugSerialPrint("Rf TX packets with retries: ");
+    debugSerialPrintln(gRfRetryCount);
+    debugSerialPrint("Rf TX total retries: ");
+    debugSerialPrintln(gRfTotalRetries);
     debugSerialPrintln();
 
     // Print Led driver diag
@@ -1258,7 +1284,7 @@ void setup()
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_LOW);
   radio.setDataRate(RF24_2MBPS);      // default - RF24_1MBPS
-  radio.setRetries(4, 5);             // Need to test with Rx and Tx running on motor and oar
+  radio.setRetries(3, 6);             // Need to test with Rx and Tx running on motor and oar
   radio.enableDynamicPayloads();
   // radio.setChannel(90);
   // radio.setAutoAck(false);

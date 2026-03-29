@@ -63,12 +63,6 @@ class RfManager(threading.Thread):
         # Shutdown flag
         self.mShutdownRequested = False
 
-        # Diagnostics
-        self.mRxCallCount = 0
-        self.mRxPacketCount = 0
-        self.mTxCallCount = 0
-        self.mTxFailCount = 0
-
     def shutdown(self):
         """Signal the RF manager to stop."""
         self.mLogger.info('RF shutdown requested')
@@ -87,37 +81,20 @@ class RfManager(threading.Thread):
                 break
 
         if messages:
-            t0 = time.time()
             self.mRadio.listen = False
-            t1 = time.time()
-            if (t1 - t0) > 0.05:
-                self.mLogger.warning('listen=False took %.3fs', t1 - t0)
-
             for newCommand in messages:
                 status, data = struct.unpack('hf', newCommand)
                 payload = struct.pack('hf', status, data)
-                tWrite = time.time()
                 result = self.mRadio.write(payload)
-                writeElapsed = time.time() - tWrite
 
                 self.mEventTimer.mark('rf_tx')
                 self.mLogger.debug('RF sending status: %s', status)
                 self.mLogger.debug('RF sending data: %s', data)
 
                 if not result:
-                    self.mTxFailCount += 1
-                    self.mLogger.error("RF TX failed (total fails: %d, write took %.3fs)", self.mTxFailCount, writeElapsed)
-                if writeElapsed > 0.05:
-                    self.mLogger.warning('radio.write() took %.3fs (result=%s)', writeElapsed, result)
+                    self.mLogger.error("RF transmission failed or timed out")
 
-            t2 = time.time()
-            self.mLogger.debug('RfSend burst: %d msgs in %.3fs', len(messages), t2 - t0)
-
-        tListen = time.time()
         self.mRadio.listen = True
-        listenElapsed = time.time() - tListen
-        if listenElapsed > 0.05:
-            self.mLogger.warning('listen=True took %.3fs', listenElapsed)
 
         # Schedule next transmission
         self.mNextTxTime += self.mTxInterval
@@ -126,29 +103,13 @@ class RfManager(threading.Thread):
     def RfReceive(self):
         if self.mShutdownRequested:
             return
-        self.mRxCallCount += 1
-        if self.mRxCallCount % 100 == 0:
-            self.mLogger.info('RfReceive heartbeat: calls=%d, packets=%d, txFails=%d',
-                              self.mRxCallCount, self.mRxPacketCount, self.mTxFailCount)
-
-        tListen = time.time()
         self.mRadio.listen = True
-        tAvail = time.time()
-        if (tAvail - tListen) > 0.05:
-            self.mLogger.warning('RX listen=True took %.3fs', tAvail - tListen)
 
         has_payload, pipe_number = self.mRadio.available_pipe()
-        tAfterAvail = time.time()
-        if (tAfterAvail - tAvail) > 0.05:
-            self.mLogger.warning('RX available_pipe() took %.3fs', tAfterAvail - tAvail)
 
         if has_payload:
-            tRead = time.time()
             length = self.mRadio.getDynamicPayloadSize()
             received = self.mRadio.read(length)
-            readElapsed = time.time() - tRead
-            if readElapsed > 0.05:
-                self.mLogger.warning('RX read() took %.3fs (len=%d)', readElapsed, length)
 
             try:
                 # Use payload length to determine format (accounts for C struct padding)
@@ -184,7 +145,6 @@ class RfManager(threading.Thread):
                 motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
                 self.mOutgoingQueue.put(motorModeCommand)
 
-                self.mRxPacketCount += 1
                 self.mEventTimer.mark('rf_rx')
             except Exception as e:
                 self.mLogger.error('RfReceive malformed packet (%d bytes): %s', length, e)

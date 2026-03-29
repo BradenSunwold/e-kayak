@@ -25,8 +25,10 @@ def main():
 
     loggerRf = logging.getLogger('loggerRf')
     loggerRf.setLevel(LOG_LEVEL_MAP[config['rfManager']['rfLoggerVerbosityLevel']])
+    loggerRf.propagate = False      # Don't propagate to root logger's synchronous StreamHandler
     loggerMotor = logging.getLogger('loggerMotor')
     loggerMotor.setLevel(LOG_LEVEL_MAP[config['motorManager']['motorLoggerVerbosityLevel']])
+    loggerMotor.propagate = False   # Don't propagate to root logger's synchronous StreamHandler
 
     # Build timestamped log file paths
     timestamp = datetime.now().strftime('%Y-%m-%d_%H:%M.%S')

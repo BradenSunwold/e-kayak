@@ -24,6 +24,12 @@ class RfManager(threading.Thread):
 
         self.mEventTimer = EventTimer(self.mLogger)
 
+        # RX rate drop tracking
+        self.mRxDropCount = 0
+        self.mRxTotalCount = 0
+        self.mRxDropLogInterval = 100  # Log every N received packets
+        self.mRxDropThresholdHz = 17.0
+
         # IMU member vars
         self.mCurrentMsgNum = 0
         self.mCurrentRoll = 0
@@ -145,7 +151,19 @@ class RfManager(threading.Thread):
                 motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
                 self.mOutgoingQueue.put(motorModeCommand)
 
-                self.mEventTimer.mark('rf_rx')
+                result = self.mEventTimer.mark('rf_rx')
+                if result is not None:
+                    delta, rate, stats = result
+                    self.mRxTotalCount += 1
+                    if rate < self.mRxDropThresholdHz:
+                        self.mRxDropCount += 1
+                    if self.mRxTotalCount % self.mRxDropLogInterval == 0:
+                        self.mLogger.info(
+                            'rf_rx drops below %g Hz: %d / %d (%.1f%%)',
+                            self.mRxDropThresholdHz,
+                            self.mRxDropCount, self.mRxTotalCount,
+                            100.0 * self.mRxDropCount / self.mRxTotalCount
+                        )
             except Exception as e:
                 self.mLogger.error('RfReceive malformed packet (%d bytes): %s', length, e)
         self.mNextRxTime += self.mRxInterval

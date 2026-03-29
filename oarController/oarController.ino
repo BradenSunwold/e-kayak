@@ -122,7 +122,7 @@ volatile bool gImuTimeout = false;
 //######################** Support functions ****************************//
 void SetImuReports(bool autoMode)
 {
-  long reportIntervalUs = 20000;    // 50 Hz single-report rate
+  long reportIntervalUs = 10000;    // 100 Hz oversample rate (5x the 20 Hz TX rate)
 
   debugSerialPrint("Setting IMU reports for mode: ");
   debugSerialPrintln(autoMode ? "AUTO" : "MANUAL");
@@ -376,6 +376,8 @@ static void ButtonInputTask( void *pvParameters )
   volatile TickType_t doubleClickTimeInMs = 0;
   volatile TickType_t doubleClickDelayInMs = 300;   // the double click time frame, lower if double click seem laggy
 
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+
   while(1)
   {
 
@@ -492,7 +494,7 @@ static void ButtonInputTask( void *pvParameters )
 
     buttonInputMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(gButtonInTaskRateInMs);   // execute task at 20Hz
+    myDelayMsUntil(&xLastWakeTime, gButtonInTaskRateInMs);   // execute task at 50Hz
   }
 
   debugSerialPrintln("Task Monitor: Deleting");
@@ -537,6 +539,8 @@ static void ProcessOutputsTask( void *pvParameters )
     strip.Color(120, 120, 255),  
     strip.Color(120, 120, 255)    // top-most (11)
     };
+
+  TickType_t xLastWakeTime = xTaskGetTickCount();
 
   while(1)
   {
@@ -756,7 +760,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
     processOutputsMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(gProcessOutTaskRateInMs);    // execute task at 20Hz
+    myDelayMsUntil(&xLastWakeTime, gProcessOutTaskRateInMs);    // execute task at 20Hz
 
   }
 
@@ -773,7 +777,9 @@ static void LedPixelUpdaterTask( void *pvParameters )
   volatile TickType_t nextPixelTimeout = xTaskGetTickCount() + (pixelMap.fDelayInMs / portTICK_PERIOD_MS);
 
   volatile int cycleCount = 0;    // Counter to track frame cycles
-  
+
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+
   while(1)
   {
 
@@ -834,7 +840,7 @@ static void LedPixelUpdaterTask( void *pvParameters )
 
     ledDriverMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(gLedDriverTaskRateInMs);    // Execute task at 100Hz
+    myDelayMsUntil(&xLastWakeTime, gLedDriverTaskRateInMs);    // Execute task at 40Hz
 
   }
 
@@ -856,6 +862,8 @@ static void LedPixelUpdaterTester( void *pvParameters )
   // index to track map transitions
   uint32_t index = 0;
   bool insertFlag = false;
+
+  TickType_t xLastWakeTime = xTaskGetTickCount();
 
   while(1)
   {
@@ -898,7 +906,7 @@ static void LedPixelUpdaterTester( void *pvParameters )
     // count = 0;
 
     // beginTime = millis();
-    myDelayMs(gLedTesterTaskRateInMs);   // execute task at 10 Hz
+    myDelayMsUntil(&xLastWakeTime, gLedTesterTaskRateInMs);   // execute task at 10 Hz
     // taskTime = millis() - beginTime;
     // debugSerialPrintln(taskTime);
   }
@@ -952,6 +960,8 @@ static void RfRadioTask( void *pvParameters )
 
   uint8_t rxDownSample = 2;   // Only try to read radio every x iterations
   uint8_t rxDownSampleCounter = 0;
+
+  TickType_t xLastWakeTime = xTaskGetTickCount();
 
   while(1)
   {
@@ -1041,7 +1051,7 @@ static void RfRadioTask( void *pvParameters )
     
     // rfRadioMetaData.GetExecutionTimer().Stop();
 
-    myDelayMs(gRfRadioTaskRateInMs);   // execute task at 20Hz
+    myDelayMsUntil(&xLastWakeTime, gRfRadioTaskRateInMs);   // execute task at 20Hz
 
   }
 
@@ -1051,6 +1061,8 @@ static void RfRadioTask( void *pvParameters )
 
 static void DumpTaskMetaDataTask( void *pvParameters )
 {
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+
   while(1)
   {
 
@@ -1219,7 +1231,7 @@ static void DumpTaskMetaDataTask( void *pvParameters )
 
     diagTaskMetaData.GetExecutionTimer().Stop(); 
 
-    myDelayMs(gDiagDumpTaskRateInMs);   // execute task at .5Hz
+    myDelayMsUntil(&xLastWakeTime, gDiagDumpTaskRateInMs);   // execute task at .5Hz
   }
 
   debugSerialPrintln("Task Monitor: Deleting");
@@ -1295,7 +1307,7 @@ void setup()
   // gReadImuTaskRateInMs = 10; 
   gProcessOutTaskRateInMs = 50; 
   gButtonInTaskRateInMs = 20; 
-  gRfRadioTaskRateInMs = 40; 
+  gRfRadioTaskRateInMs = 50; 
   gLedDriverTaskRateInMs = 25; 
   gLedTesterTaskRateInMs = 50; 
   gDiagDumpTaskRateInMs = 5000; 

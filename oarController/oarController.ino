@@ -406,6 +406,7 @@ static void ButtonInputTask( void *pvParameters )
       else if (c == 'd') {
         debugSerialPrintln("MOCK: DOUBLE");
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
+        currButtonState.fSpeed = 0;
         gAutoMode = currButtonState.fAutoMode;   // Update IMU task immediately, don't wait for queue chain
         xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
       }
@@ -453,6 +454,7 @@ static void ButtonInputTask( void *pvParameters )
 
         // Update the current state
         currButtonState.fAutoMode = !currButtonState.fAutoMode;
+        currButtonState.fSpeed = 0;
         gAutoMode = currButtonState.fAutoMode;   // Update IMU task immediately, don't wait for queue chain
         eventOccurred = true;
       }
@@ -588,11 +590,21 @@ static void ProcessOutputsTask( void *pvParameters )
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
           // Then immediatly load startup animation after
-          ledMsg = 
+          ledMsg =
           {
             .fFrameGenerator = StartupFrameGenerator(leftColorsStartupAni, rightColorsStartupAni),
             .fDelayInMs = 100,
             .fNumCyclesBlock = 1,
+            .fNumFrames = LED_COUNT
+          };
+          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+
+          // Queue gauge display after startup so it doesn't loop indefinitely
+          ledMsg =
+          {
+            .fFrameGenerator = GaugeFrameGenerator(speedPercentageReported, totalBatteryPercentageReport),
+            .fDelayInMs = 50,
+            .fNumCyclesBlock = 0,
             .fNumFrames = LED_COUNT
           };
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
@@ -731,8 +743,9 @@ static void ProcessOutputsTask( void *pvParameters )
     {
       if((paddleCmdMsg.fAutoMode && !autoMode) || (!paddleCmdMsg.fAutoMode && autoMode))
       {
-        // Toggle autoMode
+        // Toggle autoMode and sync speed
         autoMode = paddleCmdMsg.fAutoMode;
+        speedPercentageCommanded = paddleCmdMsg.fSpeed;
         gAutoMode = autoMode;   // Signal ReadImuTask to reconfigure IMU reports
 
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
@@ -748,6 +761,17 @@ static void ProcessOutputsTask( void *pvParameters )
           debugSerialPrint("Mode: ");
           debugSerialPrintln(paddleCmdMsg.fAutoMode);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+
+          // Queue gauge display after pulse so it doesn't loop indefinitely
+          ledMsg =
+          {
+            .fFrameGenerator = GaugeFrameGenerator(speedPercentageReported, totalBatteryPercentageReport),
+            .fDelayInMs = 50,
+            .fNumCyclesBlock = 0,
+            .fNumFrames = LED_COUNT
+          };
+          xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
+
           xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
         }
 

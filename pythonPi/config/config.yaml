@@ -17,7 +17,7 @@ motorManager:
   #   - SpeedThree: 90.0
   vescEnableGpioPin: 18
   motorPolePairs: 6
-  maxRpms: 2145 # 2145 corresponds to about 65% duty cycle and 12A current draw  # 500 for testing
+  maxRpms: 500 # 2145 corresponds to about 65% duty cycle and 12A current draw  # 500 for testing
   speedSettingToRpmMapInPercent: # Number of elements here has to match numberOfSpeedSettings
     - 0.0
     - 60.0

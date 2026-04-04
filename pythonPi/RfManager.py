@@ -8,9 +8,10 @@ from EventTimer import EventTimer
 
 
 class RfManager(threading.Thread):
-    def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue):
+    def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue, influxWriter=None):
         super().__init__()
         self.mLogger = logger
+        self.mInfluxWriter = influxWriter
         self.mLogger.info('**** RF Manager Starting Up *****')
         self.mLogger.info('*************************************')
 
@@ -100,6 +101,11 @@ class RfManager(threading.Thread):
                 if not result:
                     self.mLogger.error("RF transmission failed or timed out")
 
+                if self.mInfluxWriter:
+                    self.mInfluxWriter.write_point("rf", {
+                        "tx_success": 1 if result else 0,
+                    })
+
         self.mRadio.listen = True
 
         # Schedule next transmission
@@ -132,6 +138,14 @@ class RfManager(threading.Thread):
                     self.mLogger.debug('Roll: %.4f', self.mCurrentRoll)
                     self.mLogger.debug('Pitch: %.4f', self.mCurrentPitch)
                     self.mLogger.debug('Yaw: %.4f', self.mCurrentYaw)
+
+                    if self.mInfluxWriter:
+                        self.mInfluxWriter.write_point("imu", {
+                            "roll": self.mCurrentRoll,
+                            "pitch": self.mCurrentPitch,
+                            "yaw": self.mCurrentYaw,
+                            "speed_cmd": self.mCurrentMotorSpeed,
+                        }, tags={"mode": "manual"})
                 elif length == autoSize:
                     self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveFormatAuto, received)
 
@@ -143,6 +157,17 @@ class RfManager(threading.Thread):
                     self.mLogger.debug('Y Gyroscope: %.4f', self.mCurrentGyroY)
                     self.mLogger.debug('Z Acceleration: %.4f', self.mCurrentAccelZ)
                     self.mLogger.debug('Z Gyroscope: %.4f', self.mCurrentGyroZ)
+
+                    if self.mInfluxWriter:
+                        self.mInfluxWriter.write_point("imu", {
+                            "accel_x": self.mCurrentAccelX,
+                            "accel_y": self.mCurrentAccelY,
+                            "accel_z": self.mCurrentAccelZ,
+                            "gyro_x": self.mCurrentGyroX,
+                            "gyro_y": self.mCurrentGyroY,
+                            "gyro_z": self.mCurrentGyroZ,
+                            "speed_cmd": self.mCurrentMotorSpeed,
+                        }, tags={"mode": "auto"})
                 else:
                     self.mLogger.error('RfReceive unexpected packet length: %d bytes', length)
                     raise ValueError('unexpected packet length: %d' % length)
@@ -164,6 +189,17 @@ class RfManager(threading.Thread):
                             self.mRxDropCount, self.mRxTotalCount,
                             100.0 * self.mRxDropCount / self.mRxTotalCount
                         )
+
+                    if self.mInfluxWriter:
+                        dropPct = (100.0 * self.mRxDropCount / self.mRxTotalCount) if self.mRxTotalCount > 0 else 0.0
+                        self.mInfluxWriter.write_point("rf", {
+                            "rx_rate_hz": rate,
+                            "rx_delta_ms": delta * 1000.0,
+                            "rx_drop_count": self.mRxDropCount,
+                            "rx_total_count": self.mRxTotalCount,
+                            "rx_drop_pct": dropPct,
+                            "rx_jitter_ms": stats['std'] * 1000.0,
+                        })
             except Exception as e:
                 self.mLogger.error('RfReceive malformed packet (%d bytes): %s', length, e)
         self.mNextRxTime += self.mRxInterval

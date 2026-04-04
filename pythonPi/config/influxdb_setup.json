@@ -1,0 +1,7 @@
+{
+    "url": "http://localhost:8086",
+    "org": "ekayak",
+    "bucket": "telemetry",
+    "token": "MC5kc_AWM18ugKGec4zG8-w6QPvJrEnz4-IQqJ_Dy5EDyHuhmpY-lTfpdCSbLpaUd3ky8pR2AN7KLZTWia1z5Q==",
+    "retention": "2w"
+}

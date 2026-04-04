@@ -45,9 +45,10 @@ FAULT_CONFIG_KEY = {
 
 
 class MotorManager(threading.Thread):
-    def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue):
+    def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue, influxWriter=None):
         super().__init__()
         self.mLogger = logger
+        self.mInfluxWriter = influxWriter
         self.mLogger.info('**** Motor Manager Starting Up *****')
         self.mLogger.info('*************************************')
 
@@ -320,6 +321,15 @@ class MotorManager(threading.Thread):
         filteredRpm = self.mRateLimiter.Feed(self.mRpm)
         self.mLogger.debug('Filtered RPM: %s', filteredRpm)
 
+        if self.mInfluxWriter:
+            self.mInfluxWriter.write_point("motor_cmd", {
+                "commanded_rpm": self.mRpm,
+                "filtered_rpm": filteredRpm,
+                "speed_setting": self.mMotorSpeedManual,
+                "mode": int(self.mMode),
+                "max_rpms": float(self.mMaxRpms),
+            })
+
         filteredRpm *= self.mMotorPolePairs
         self.mSerial.write(pyvesc.encode(SetRPM(int(filteredRpm))))
 
@@ -366,6 +376,20 @@ class MotorManager(threading.Thread):
                 self.mLogger.debug('Fault Code: %s', vescFaultCode)
                 self.mLogger.debug('Power: %s', self.mPowerMotor)
                 self.mLogger.debug('Active Fault: %s', self.mActiveFault.name)
+
+                if self.mInfluxWriter:
+                    self.mInfluxWriter.write_point("motor", {
+                        "rpm": self.mRpmFeedback,
+                        "duty_cycle": self.mDutyCycle,
+                        "voltage_in": self.mVoltage,
+                        "current_in": self.mCurrentIn,
+                        "motor_current": self.mCurrentMotor,
+                        "power": self.mPowerMotor,
+                        "temp_fets": self.mTemp,
+                        "amp_hours": response.amp_hours,
+                        "watt_hours": response.watt_hours,
+                        "fault_code": vescFaultCode,
+                    }, tags={"fault": self.mActiveFault.name})
 
             except Exception as e:
                 self.mLogger.error('ReadMotor exception: %s', e)

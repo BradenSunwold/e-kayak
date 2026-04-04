@@ -1,6 +1,7 @@
 import os
 import signal
 import yaml
+import json
 import logging
 import logging.handlers
 import queue
@@ -8,6 +9,7 @@ from datetime import datetime
 
 from RfManager import RfManager
 from MotorManager import MotorManager
+from InfluxWriter import InfluxWriter
 
 def main():
     configPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "config.yaml")
@@ -61,13 +63,17 @@ def main():
     rfLogListener.start()
     motorLogListener.start()
 
+    # Initialize InfluxDB writer
+    influxConfigPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "influxdb_setup.json")
+    influxWriter = InfluxWriter(influxConfigPath)
+
     # Create queues for thread comms
     motorToRfQueue = queue.Queue()
     rfToMotorQueue = queue.Queue()
 
     # Create manager objects
-    rfManager = RfManager(config['rfManager'], loggerRf, motorToRfQueue, rfToMotorQueue)
-    motorManager = MotorManager(config['motorManager'], loggerMotor, rfToMotorQueue, motorToRfQueue)
+    rfManager = RfManager(config['rfManager'], loggerRf, motorToRfQueue, rfToMotorQueue, influxWriter)
+    motorManager = MotorManager(config['motorManager'], loggerMotor, rfToMotorQueue, motorToRfQueue, influxWriter)
 
     def shutdownHandler(signum, frame):
         """Handle SIGINT/SIGTERM for graceful shutdown."""
@@ -75,6 +81,7 @@ def main():
         logger.info('Shutdown signal received (signal %s)', signum)
         motorManager.shutdown()
         rfManager.shutdown()
+        influxWriter.close()
         rfLogListener.stop()
         motorLogListener.stop()
 

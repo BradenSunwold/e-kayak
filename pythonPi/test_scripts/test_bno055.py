@@ -5,10 +5,11 @@ Ctrl+C to stop.
 """
 
 import time
-import board
+from adafruit_extended_bus import ExtendedI2C
 import adafruit_bno055
 
-i2c = board.I2C()
+# Use bit-banged i2c-3 bus (SDA=GPIO17, SCL=GPIO27 per config.txt dtoverlay)
+i2c = ExtendedI2C(3)
 sensor = adafruit_bno055.BNO055_I2C(i2c)
 
 print("BNO055 IMU Test — reading Euler angles (heading, roll, pitch)")

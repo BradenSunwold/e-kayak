@@ -17,10 +17,12 @@ print("Waiting for calibration... move the sensor around.")
 print("-" * 50)
 
 while True:
+    sys_cal, gyro_cal, accel_cal, mag_cal = sensor.calibration_status
     euler = sensor.euler
     if euler[0] is not None:
         heading, roll, pitch = euler
-        print(f"Heading: {heading:7.2f}°  Roll: {roll:7.2f}°  Pitch: {pitch:7.2f}°")
+        print(f"Heading: {heading:7.2f}°  Roll: {roll:7.2f}°  Pitch: {pitch:7.2f}°  "
+              f"Cal[sys={sys_cal} gyro={gyro_cal} accel={accel_cal} mag={mag_cal}]")
     else:
         print("Sensor not calibrated yet...")
     time.sleep(0.1)

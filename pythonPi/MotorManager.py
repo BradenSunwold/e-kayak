@@ -77,6 +77,8 @@ class MotorManager(threading.Thread):
 
         # Fin controller state
         self.mHeadingSetpoint = 0.0
+        self.mFinOpenLoop = False       # True when user is actively steering via oar pitch
+        self.mFinOutput = 0.0           # Normalized fin command: -1.0 (full right) to 1.0 (full left)
 
         # Variables coming from motor
         self.mVoltage = 0.0
@@ -120,6 +122,8 @@ class MotorManager(threading.Thread):
         # Fin controller config
         self.mFinConfig = self.mConfigurator.get('finController', {})
         self.mPitchDeadbandDeg = self.mFinConfig.get('pitchDeadbandDeg', 5.0)
+        self.mOpenLoopGain = self.mFinConfig.get('openLoopGain', 0.02)      # Fin deflection per degree of oar pitch
+        self.mMaxFinDeflection = self.mFinConfig.get('maxFinDeflection', 1.0)
 
         # Set up scheduler
         self.mScheduler = sched.scheduler(time.time, time.sleep)
@@ -450,30 +454,72 @@ class MotorManager(threading.Thread):
             self.mLogger.debug('Oar IMU  roll=%.2f  pitch=%.2f  yaw=%.2f',
                                self.mOarRoll, self.mOarPitch, self.mOarYaw)
 
-    def FinController(self):
-        """Scheduled fin control loop. Reads IMU data and logs state.
+    def _UpdateHeadingSetpoint(self):
+        """Pre-conditioning step: read all IMU data and determine heading setpoint + control mode.
 
-        Future: implements open-loop steering when oar pitch exceeds deadband,
-        and closed-loop heading hold via PID when pitch is near zero.
+        In manual mode:
+          - If |oar_pitch| > deadband: open-loop steering. Fin deflects proportional to
+            oar pitch (negative pitch = right turn). Heading setpoint is NOT updated so
+            it retains the last latched value for when the user releases.
+          - If |oar_pitch| <= deadband: latch current kayak heading as setpoint,
+            switch to closed-loop heading hold.
+
+        In auto mode (future):
+          - ML algorithm provides heading setpoint directly.
         """
-        if self.mShutdownRequested:
-            return
-
         self._ReadKayakImu()
         self._ReadOarImu()
 
-        # Determine steering vs heading-hold state
-        if abs(self.mOarPitch) > self.mPitchDeadbandDeg:
-            # STEERING: user is commanding a direction change
-            # Negative oar pitch = right turn
-            direction = 'RIGHT' if self.mOarPitch < 0 else 'LEFT'
-            self.mLogger.debug('Fin STEERING %s  oar_pitch=%.2f  kayak_heading=%.2f',
-                               direction, self.mOarPitch, self.mKayakHeading)
+        if self.mMode == 0:
+            # Manual mode — oar pitch drives steering intent
+            if abs(self.mOarPitch) > self.mPitchDeadbandDeg:
+                # Open-loop: scale oar pitch into fin deflection
+                # Negative pitch = right turn = negative fin output
+                rawDeflection = self.mOarPitch * self.mOpenLoopGain
+                self.mFinOpenLoop = True
+                self.mFinOutput = max(-self.mMaxFinDeflection,
+                                      min(self.mMaxFinDeflection, rawDeflection))
+                self.mLogger.debug('Setpoint STEERING  oar_pitch=%.2f  open_loop_output=%.3f',
+                                   self.mOarPitch, self.mFinOutput)
+            else:
+                # Closed-loop: latch current heading when user releases the pitch
+                if self.mFinOpenLoop:
+                    # Transition from steering to hold — latch now
+                    self.mHeadingSetpoint = self.mKayakHeading
+                    self.mLogger.debug('Setpoint LATCH  heading=%.2f', self.mHeadingSetpoint)
+                self.mFinOpenLoop = False
         else:
-            # HEADING HOLD: latch current heading as setpoint
-            self.mHeadingSetpoint = self.mKayakHeading
-            self.mLogger.debug('Fin HEADING_HOLD  setpoint=%.2f  kayak_heading=%.2f',
-                               self.mHeadingSetpoint, self.mKayakHeading)
+            # Auto mode — ML provides setpoint (placeholder)
+            self.mFinOpenLoop = False
+
+    def _FinController(self):
+        """Pure heading controller. Computes fin servo output from setpoint and feedback.
+
+        If open-loop (user actively steering): fin output was already set by _UpdateHeadingSetpoint.
+        If closed-loop (heading hold): compute error and drive fin to maintain setpoint.
+        """
+        if self.mFinOpenLoop:
+            # Open-loop output already computed in _UpdateHeadingSetpoint
+            self.mLogger.debug('FinCtrl OPEN_LOOP  output=%.3f', self.mFinOutput)
+        else:
+            # Closed-loop heading hold
+            # Wrap-safe heading error: result in [-180, 180]
+            headingError = (self.mHeadingSetpoint - self.mKayakHeading + 180) % 360 - 180
+            self.mLogger.debug('FinCtrl CLOSED_LOOP  setpoint=%.2f  heading=%.2f  error=%.2f',
+                               self.mHeadingSetpoint, self.mKayakHeading, headingError)
+
+            # TODO: PID controller — for now just log the error
+            self.mFinOutput = 0.0
+
+        # TODO: Write mFinOutput to servo hardware
+
+    def FinControlLoop(self):
+        """Scheduled entry point for the fin control pipeline."""
+        if self.mShutdownRequested:
+            return
+
+        self._UpdateHeadingSetpoint()
+        self._FinController()
 
         if self.mInfluxWriter:
             self.mInfluxWriter.write_point("fin_controller", {
@@ -482,10 +528,12 @@ class MotorManager(threading.Thread):
                 "oar_pitch": self.mOarPitch,
                 "oar_roll": self.mOarRoll,
                 "oar_yaw": self.mOarYaw,
+                "fin_output": self.mFinOutput,
+                "open_loop": int(self.mFinOpenLoop),
             })
 
         self.mNextFinControlTime += self.mFinControlInterval
-        self.mScheduler.enterabs(self.mNextFinControlTime, 1, self.FinController)
+        self.mScheduler.enterabs(self.mNextFinControlTime, 1, self.FinControlLoop)
 
     def StartScheduler(self) :
         # Reset timeout baselines so VESC boot delay doesn't trigger false coms loss
@@ -504,7 +552,7 @@ class MotorManager(threading.Thread):
         self.mScheduler.enterabs(self.mNextCommandReadTime, 1, self.ReadCommands)
         self.mScheduler.enterabs(self.mNextMotorWriteTime, 1, self.WriteMotor)
         self.mScheduler.enterabs(self.mNextMotorReadTime, 1, self.ReadMotor)
-        self.mScheduler.enterabs(self.mNextFinControlTime, 1, self.FinController)
+        self.mScheduler.enterabs(self.mNextFinControlTime, 1, self.FinControlLoop)
 
         # Start the scheduler
         self.mScheduler.run()

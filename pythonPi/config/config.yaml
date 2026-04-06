@@ -100,6 +100,8 @@ motorManager:
   finController:
     controlRateInMilliseconds: 100
     pitchDeadbandDeg: 10.0
+    openLoopGain: 0.02            # Fin deflection per degree of oar pitch
+    maxFinDeflection: 1.0         # Clamp fin output to [-1.0, 1.0]
   motorLoggerVerbosityLevel: DEBUG
   motorLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/motorLog.txt
 imuManager:

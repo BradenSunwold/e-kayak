@@ -97,5 +97,14 @@ motorManager:
       latching: true
     unknown:
       latching: true
+  finController:
+    controlRateInMilliseconds: 100
+    pitchDeadbandDeg: 10.0
   motorLoggerVerbosityLevel: DEBUG
   motorLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/motorLog.txt
+imuManager:
+  i2cBus: 3
+  calibrationFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/config/bno055_calibration.json
+  imuReadRateInMilliseconds: 50
+  imuLoggerVerbosityLevel: DEBUG
+  imuLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/imuLog.txt

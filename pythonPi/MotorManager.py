@@ -45,7 +45,8 @@ FAULT_CONFIG_KEY = {
 
 
 class MotorManager(threading.Thread):
-    def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue, influxWriter=None):
+    def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue,
+                 imuQueue=None, oarImuQueue=None, influxWriter=None):
         super().__init__()
         self.mLogger = logger
         self.mInfluxWriter = influxWriter
@@ -56,6 +57,8 @@ class MotorManager(threading.Thread):
         self.mRpm = 0.0
         self.mIncomingQueue = incomingQueue
         self.mOutgoingQueue = outgoingQueue
+        self.mImuQueue = imuQueue              # Kayak heading from ImuManager
+        self.mOarImuQueue = oarImuQueue        # Oar pitch/roll/yaw from RfManager
 
         # Variables coming from RF manager
         self.mMotorSpeedManual = 0
@@ -63,6 +66,17 @@ class MotorManager(threading.Thread):
 
         # Variables coming from ML model
         self.mEstimatedSpeed = 0.0
+
+        # Kayak IMU state
+        self.mKayakHeading = 0.0
+
+        # Oar IMU state
+        self.mOarRoll = 0.0
+        self.mOarPitch = 0.0
+        self.mOarYaw = 0.0
+
+        # Fin controller state
+        self.mHeadingSetpoint = 0.0
 
         # Variables coming from motor
         self.mVoltage = 0.0
@@ -103,14 +117,20 @@ class MotorManager(threading.Thread):
         self.mRateLimiter = FIR.FIR(self.mRateLimiterTaps)
         self.mRateLimiter.Clear()
 
+        # Fin controller config
+        self.mFinConfig = self.mConfigurator.get('finController', {})
+        self.mPitchDeadbandDeg = self.mFinConfig.get('pitchDeadbandDeg', 5.0)
+
         # Set up scheduler
         self.mScheduler = sched.scheduler(time.time, time.sleep)
         self.mCommandReadInterval = self.mConfigurator['motorCommandReadRateInMilliseconds'] / 1000
         self.mMotorWriteInterval = self.mConfigurator['motorWriteRateInMilliseconds'] / 1000
         self.mMotorReadInterval = self.mConfigurator['motorReadRateInMilliseconds'] / 1000
+        self.mFinControlInterval = self.mFinConfig.get('controlRateInMilliseconds', 50) / 1000
         self.mNextCommandReadTime = 0
         self.mNextMotorWriteTime = 0
         self.mNextMotorReadTime = 0
+        self.mNextFinControlTime = 0
 
         # Init VESC enable GPIO
         self.mVescEnablePin = self.mConfigurator['vescEnableGpioPin']
@@ -401,6 +421,72 @@ class MotorManager(threading.Thread):
         self.mNextMotorReadTime += self.mMotorReadInterval
         self.mScheduler.enterabs(self.mNextMotorReadTime, 1, self.ReadMotor)
 
+    def _ReadKayakImu(self):
+        """Drain the kayak IMU queue and store the latest heading."""
+        if self.mImuQueue is None:
+            return
+        latestPayload = None
+        while True:
+            try:
+                latestPayload = self.mImuQueue.get_nowait()
+            except queue.Empty:
+                break
+        if latestPayload is not None:
+            (self.mKayakHeading,) = struct.unpack('f', latestPayload)
+            self.mLogger.debug('Kayak heading: %.2f', self.mKayakHeading)
+
+    def _ReadOarImu(self):
+        """Drain the oar IMU queue and store the latest pitch/roll/yaw."""
+        if self.mOarImuQueue is None:
+            return
+        latestPayload = None
+        while True:
+            try:
+                latestPayload = self.mOarImuQueue.get_nowait()
+            except queue.Empty:
+                break
+        if latestPayload is not None:
+            self.mOarRoll, self.mOarPitch, self.mOarYaw = struct.unpack('fff', latestPayload)
+            self.mLogger.debug('Oar IMU  roll=%.2f  pitch=%.2f  yaw=%.2f',
+                               self.mOarRoll, self.mOarPitch, self.mOarYaw)
+
+    def FinController(self):
+        """Scheduled fin control loop. Reads IMU data and logs state.
+
+        Future: implements open-loop steering when oar pitch exceeds deadband,
+        and closed-loop heading hold via PID when pitch is near zero.
+        """
+        if self.mShutdownRequested:
+            return
+
+        self._ReadKayakImu()
+        self._ReadOarImu()
+
+        # Determine steering vs heading-hold state
+        if abs(self.mOarPitch) > self.mPitchDeadbandDeg:
+            # STEERING: user is commanding a direction change
+            # Negative oar pitch = right turn
+            direction = 'RIGHT' if self.mOarPitch < 0 else 'LEFT'
+            self.mLogger.debug('Fin STEERING %s  oar_pitch=%.2f  kayak_heading=%.2f',
+                               direction, self.mOarPitch, self.mKayakHeading)
+        else:
+            # HEADING HOLD: latch current heading as setpoint
+            self.mHeadingSetpoint = self.mKayakHeading
+            self.mLogger.debug('Fin HEADING_HOLD  setpoint=%.2f  kayak_heading=%.2f',
+                               self.mHeadingSetpoint, self.mKayakHeading)
+
+        if self.mInfluxWriter:
+            self.mInfluxWriter.write_point("fin_controller", {
+                "kayak_heading": self.mKayakHeading,
+                "heading_setpoint": self.mHeadingSetpoint,
+                "oar_pitch": self.mOarPitch,
+                "oar_roll": self.mOarRoll,
+                "oar_yaw": self.mOarYaw,
+            })
+
+        self.mNextFinControlTime += self.mFinControlInterval
+        self.mScheduler.enterabs(self.mNextFinControlTime, 1, self.FinController)
+
     def StartScheduler(self) :
         # Reset timeout baselines so VESC boot delay doesn't trigger false coms loss
         now = time.time()
@@ -412,11 +498,13 @@ class MotorManager(threading.Thread):
         self.mNextCommandReadTime = now
         self.mNextMotorWriteTime = now
         self.mNextMotorReadTime = now
+        self.mNextFinControlTime = now
 
         # Schedule the initial run of functions
         self.mScheduler.enterabs(self.mNextCommandReadTime, 1, self.ReadCommands)
         self.mScheduler.enterabs(self.mNextMotorWriteTime, 1, self.WriteMotor)
         self.mScheduler.enterabs(self.mNextMotorReadTime, 1, self.ReadMotor)
+        self.mScheduler.enterabs(self.mNextFinControlTime, 1, self.FinController)
 
         # Start the scheduler
         self.mScheduler.run()

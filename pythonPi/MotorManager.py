@@ -8,6 +8,8 @@ import serial
 import RPi.GPIO as GPIO
 import pyvesc
 from pyvesc import GetValues, SetRPM, SetCurrent
+from gpiozero import AngularServo
+from gpiozero.pins.pigpio import PiGPIOFactory
 import FIR
 
 from KayakDefines import StatusType
@@ -78,7 +80,7 @@ class MotorManager(threading.Thread):
         # Fin controller state
         self.mHeadingSetpoint = 0.0
         self.mFinOpenLoop = False       # True when user is actively steering via oar pitch
-        self.mFinOutput = 0.0           # Normalized fin command: -1.0 (full right) to 1.0 (full left)
+        self.mFinAngle = 0.0            # Fin angle in degrees: -MAX to +MAX (positive = right turn)
 
         # Variables coming from motor
         self.mVoltage = 0.0
@@ -122,8 +124,26 @@ class MotorManager(threading.Thread):
         # Fin controller config
         self.mFinConfig = self.mConfigurator.get('finController', {})
         self.mPitchDeadbandDeg = self.mFinConfig.get('pitchDeadbandDeg', 5.0)
-        self.mOpenLoopGain = self.mFinConfig.get('openLoopGain', 0.02)      # Fin deflection per degree of oar pitch
-        self.mMaxFinDeflection = self.mFinConfig.get('maxFinDeflection', 1.0)
+        self.mOpenLoopGain = self.mFinConfig.get('openLoopGain', 1.0)       # Fin degrees per degree of oar pitch
+        self.mMaxFinAngle = self.mFinConfig.get('maxFinAngleDeg', 30.0)     # Max fin deflection in degrees
+        self.mServoNeutralAngle = 90.0                                       # Servo angle that corresponds to 0 fin deflection
+
+        # Init fin servo via gpiozero + pigpio for jitter-free PWM
+        servoPin = self.mFinConfig.get('servoGpioPin', 12)
+        self.mPiGpioFactory = PiGPIOFactory()
+        self.mFinServo = AngularServo(
+            servoPin,
+            min_angle=0,
+            max_angle=180,
+            min_pulse_width=0.0005,   # 500us
+            max_pulse_width=0.0025,   # 2500us
+            pin_factory=self.mPiGpioFactory,
+            initial_angle=None,
+        )
+        # Zero the fin on startup
+        self._SetFinAngle(0.0)
+        self.mLogger.info('Fin servo initialized on GPIO %s, zeroed to %.1f°',
+                          servoPin, self.mServoNeutralAngle)
 
         # Set up scheduler
         self.mScheduler = sched.scheduler(time.time, time.sleep)
@@ -425,6 +445,16 @@ class MotorManager(threading.Thread):
         self.mNextMotorReadTime += self.mMotorReadInterval
         self.mScheduler.enterabs(self.mNextMotorReadTime, 1, self.ReadMotor)
 
+    def _SetFinAngle(self, angleDeg):
+        """Set the fin angle in degrees. 0 = straight, positive = right turn, negative = left turn.
+
+        Clamps to ±mMaxFinAngle, converts to servo angle (90° = neutral), and writes to servo.
+        """
+        clamped = max(-self.mMaxFinAngle, min(self.mMaxFinAngle, angleDeg))
+        self.mFinAngle = clamped
+        servoAngle = self.mServoNeutralAngle + clamped
+        self.mFinServo.angle = servoAngle
+
     def _ReadKayakImu(self):
         """Drain the kayak IMU queue and store the latest heading."""
         if self.mImuQueue is None:
@@ -473,14 +503,14 @@ class MotorManager(threading.Thread):
         if self.mMode == 0:
             # Manual mode — oar pitch drives steering intent
             if abs(self.mOarPitch) > self.mPitchDeadbandDeg:
-                # Open-loop: scale oar pitch into fin deflection
-                # Negative pitch = right turn = negative fin output
-                rawDeflection = self.mOarPitch * self.mOpenLoopGain
+                # Open-loop: proportionally map oar pitch to fin angle in degrees
+                # Positive oar pitch = left turn intent = negative fin angle (invert)
                 self.mFinOpenLoop = True
-                self.mFinOutput = max(-self.mMaxFinDeflection,
-                                      min(self.mMaxFinDeflection, rawDeflection))
-                self.mLogger.debug('Setpoint STEERING  oar_pitch=%.2f  open_loop_output=%.3f',
-                                   self.mOarPitch, self.mFinOutput)
+                self.mFinAngle = max(-self.mMaxFinAngle,
+                                     min(self.mMaxFinAngle,
+                                         -self.mOarPitch * self.mOpenLoopGain))
+                self.mLogger.debug('Setpoint STEERING  oar_pitch=%.2f  fin_angle=%.2f',
+                                   self.mOarPitch, self.mFinAngle)
             else:
                 # Closed-loop: latch current heading when user releases the pitch
                 if self.mFinOpenLoop:
@@ -493,14 +523,15 @@ class MotorManager(threading.Thread):
             self.mFinOpenLoop = False
 
     def _FinController(self):
-        """Pure heading controller. Computes fin servo output from setpoint and feedback.
+        """Pure heading controller. Computes fin angle from setpoint and feedback, writes to servo.
 
-        If open-loop (user actively steering): fin output was already set by _UpdateHeadingSetpoint.
+        If open-loop (user actively steering): fin angle was already set by _UpdateHeadingSetpoint.
         If closed-loop (heading hold): compute error and drive fin to maintain setpoint.
         """
         if self.mFinOpenLoop:
-            # Open-loop output already computed in _UpdateHeadingSetpoint
-            self.mLogger.debug('FinCtrl OPEN_LOOP  output=%.3f', self.mFinOutput)
+            # Open-loop angle already computed in _UpdateHeadingSetpoint
+            self._SetFinAngle(self.mFinAngle)
+            self.mLogger.debug('FinCtrl OPEN_LOOP  fin_angle=%.2f', self.mFinAngle)
         else:
             # Closed-loop heading hold
             # Wrap-safe heading error: result in [-180, 180]
@@ -508,10 +539,8 @@ class MotorManager(threading.Thread):
             self.mLogger.debug('FinCtrl CLOSED_LOOP  setpoint=%.2f  heading=%.2f  error=%.2f',
                                self.mHeadingSetpoint, self.mKayakHeading, headingError)
 
-            # TODO: PID controller — for now just log the error
-            self.mFinOutput = 0.0
-
-        # TODO: Write mFinOutput to servo hardware
+            # TODO: PID controller — for now center the fin
+            self._SetFinAngle(0.0)
 
     def FinControlLoop(self):
         """Scheduled entry point for the fin control pipeline."""
@@ -528,7 +557,7 @@ class MotorManager(threading.Thread):
                 "oar_pitch": self.mOarPitch,
                 "oar_roll": self.mOarRoll,
                 "oar_yaw": self.mOarYaw,
-                "fin_output": self.mFinOutput,
+                "servo_angle": self.mServoNeutralAngle + self.mFinAngle,
                 "open_loop": int(self.mFinOpenLoop),
             })
 
@@ -575,6 +604,13 @@ class MotorManager(threading.Thread):
             self.mLogger.info('Serial port closed')
         except Exception as e:
             self.mLogger.error('Failed to close serial: %s', e)
+
+        # Center fin servo before shutdown
+        try:
+            self._SetFinAngle(0.0)
+            self.mLogger.info('Fin servo centered')
+        except Exception as e:
+            self.mLogger.error('Failed to center fin servo: %s', e)
 
         # Disable VESC
         try:

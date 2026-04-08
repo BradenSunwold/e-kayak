@@ -12,6 +12,7 @@ from gpiozero import AngularServo
 from gpiozero.pins.pigpio import PiGPIOFactory
 import FIR
 import RCFilter
+import PIDController
 
 from KayakDefines import StatusType
 from KayakDefines import VescFaultCodes
@@ -80,6 +81,7 @@ class MotorManager(threading.Thread):
 
         # Fin controller state
         self.mHeadingSetpoint = 0.0
+        self.mHeadingInitialized = False  # True once first IMU reading seeds the setpoint
         self.mFinOpenLoop = False       # True when user is actively steering via oar pitch
         self.mFinAngle = 0.0            # Fin angle in degrees: -MAX to +MAX (positive = right turn)
 
@@ -131,6 +133,15 @@ class MotorManager(threading.Thread):
         self.mServoNeutralAngle = 90.0                                       # Servo angle that corresponds to 0 fin deflection
         self.mFinFilterTau = self.mFinConfig.get('finFilterTauInSeconds', 0.3)
 
+        # Heading PID controller config
+        headingPid = self.mFinConfig.get('headingPid', {})
+        self.mHeadingKp = headingPid.get('kP', 0.0)
+        self.mHeadingKi = headingPid.get('kI', 0.0)
+        self.mHeadingKd = headingPid.get('kD', 0.0)
+        self.mHeadingIntegralLimit = headingPid.get('integralLimit', 30.0)
+        self.mHeadingOutputMin = headingPid.get('outputMinDeg', -self.mMaxFinAngle)
+        self.mHeadingOutputMax = headingPid.get('outputMaxDeg', self.mMaxFinAngle)
+
         # Init fin servo via gpiozero + pigpio for jitter-free PWM
         servoPin = self.mFinConfig.get('servoGpioPin', 12)
         self.mPiGpioFactory = PiGPIOFactory()
@@ -154,6 +165,11 @@ class MotorManager(threading.Thread):
         self.mMotorReadInterval = self.mConfigurator['motorReadRateInMilliseconds'] / 1000
         self.mFinControlInterval = self.mFinConfig.get('controlRateInMilliseconds', 50) / 1000
         self.mFinAngleFilter = RCFilter.RCFilter(self.mFinFilterTau, self.mFinControlInterval)
+        self.mHeadingPid = PIDController.PIDController(
+            self.mHeadingKp, self.mHeadingKi, self.mHeadingKd,
+            self.mFinControlInterval,
+            self.mHeadingOutputMin, self.mHeadingOutputMax,
+            self.mHeadingIntegralLimit)
         self.mNextCommandReadTime = 0
         self.mNextMotorWriteTime = 0
         self.mNextMotorReadTime = 0
@@ -472,6 +488,11 @@ class MotorManager(threading.Thread):
             (self.mKayakHeading,) = struct.unpack('f', latestPayload)
             self.mLogger.debug('Kayak heading: %.2f', self.mKayakHeading)
 
+            if not self.mHeadingInitialized:
+                self.mHeadingSetpoint = self.mKayakHeading
+                self.mHeadingInitialized = True
+                self.mLogger.info('Heading initialized to %.2f', self.mKayakHeading)
+
     def _ReadOarImu(self):
         """Drain the oar IMU queue and store the latest pitch/roll/yaw."""
         if self.mOarImuQueue is None:
@@ -524,6 +545,7 @@ class MotorManager(threading.Thread):
                 if self.mFinOpenLoop:
                     # Transition from steering to hold — latch now
                     self.mHeadingSetpoint = self.mKayakHeading
+                    self.mHeadingPid.Reset()
                     self.mLogger.debug('Setpoint LATCH  heading=%.2f', self.mHeadingSetpoint)
                 self.mFinOpenLoop = False
         else:
@@ -545,13 +567,16 @@ class MotorManager(threading.Thread):
             # Closed-loop heading hold
             # Wrap-safe heading error: result in [-180, 180]
             headingError = (self.mHeadingSetpoint - self.mKayakHeading + 180) % 360 - 180
-            self.mLogger.debug('FinCtrl CLOSED_LOOP  setpoint=%.2f  heading=%.2f  error=%.2f',
-                               self.mHeadingSetpoint, self.mKayakHeading, headingError)
 
-            # TODO: PID controller — for now filter the fin back to center
-            filteredFinAngle = self.mFinAngleFilter.Feed(0.0)
+            # PID controller outputs fin angle in degrees
+            finAngle = self.mHeadingPid.Update(headingError, self.mKayakHeading)
+
+            # Smooth through the same fin angle filter so the transition from
+            # open-loop decays naturally instead of snapping
+            filteredFinAngle = self.mFinAngleFilter.Feed(finAngle)
             self._SetFinAngle(filteredFinAngle)
-            self.mLogger.debug('FinCtrl CLOSED_LOOP  filtered=%.2f', filteredFinAngle)
+            self.mLogger.debug('FinCtrl CLOSED_LOOP  setpoint=%.2f  heading=%.2f  error=%.2f  pid=%.2f  fin=%.2f',
+                               self.mHeadingSetpoint, self.mKayakHeading, headingError, finAngle, filteredFinAngle)
 
     def FinControlLoop(self):
         """Scheduled entry point for the fin control pipeline."""
@@ -568,8 +593,14 @@ class MotorManager(threading.Thread):
                 "oar_pitch": self.mOarPitch,
                 "oar_roll": self.mOarRoll,
                 "oar_yaw": self.mOarYaw,
+                "fin_angle": self.mFinAngle,
                 "servo_angle": self.mServoNeutralAngle + self.mFinAngle,
                 "open_loop": int(self.mFinOpenLoop),
+                "pid_p_term": self.mHeadingPid.mLastPTerm,
+                "pid_i_term": self.mHeadingPid.mLastITerm,
+                "pid_d_term": self.mHeadingPid.mLastDTerm,
+                "pid_output": self.mHeadingPid.mLastOutput,
+                "pid_integral": self.mHeadingPid.mIntegral,
             })
 
         self.mNextFinControlTime += self.mFinControlInterval

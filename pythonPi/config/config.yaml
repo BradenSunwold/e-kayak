@@ -97,12 +97,14 @@ motorManager:
       latching: true
     unknown:
       latching: true
+  rpmFilterTauInSeconds: 1.3       # RC filter time constant for RPM rate limiter (replaces FIR taps)
   finController:
     controlRateInMilliseconds: 100
     pitchDeadbandDeg: 10.0
     openLoopGain: 0.85             # Fin degrees per degree of oar pitch
     maxFinAngleDeg: 30.0          # Max fin deflection in degrees (±30)
     servoGpioPin: 12
+    finFilterTauInSeconds: 0.3    # RC filter time constant for smoothing fin angle commands
   motorLoggerVerbosityLevel: DEBUG
   motorLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/motorLog.txt
 imuManager:

@@ -11,6 +11,7 @@ from pyvesc import GetValues, SetRPM, SetCurrent
 from gpiozero import AngularServo
 from gpiozero.pins.pigpio import PiGPIOFactory
 import FIR
+import RCFilter
 
 from KayakDefines import StatusType
 from KayakDefines import VescFaultCodes
@@ -116,9 +117,9 @@ class MotorManager(threading.Thread):
         self.mMotorPolePairs = self.mConfigurator['motorPolePairs']
         self.mFaultConfig = self.mConfigurator['faultConfig']
 
-        # Init RPM rate limiter
-        self.mRateLimiterTaps = self.mConfigurator['rpmRateLimiterTaps']
-        self.mRateLimiter = FIR.FIR(self.mRateLimiterTaps)
+        # Init RPM rate limiter (RC filter replaces FIR for simpler config)
+        self.mRpmFilterTau = self.mConfigurator.get('rpmFilterTauInSeconds', 1.3)
+        self.mRateLimiter = RCFilter.RCFilter(self.mRpmFilterTau, self.mMotorWriteInterval)
         self.mRateLimiter.Clear()
 
         # Fin controller config
@@ -127,6 +128,7 @@ class MotorManager(threading.Thread):
         self.mOpenLoopGain = self.mFinConfig.get('openLoopGain', 1.0)       # Fin degrees per degree of oar pitch
         self.mMaxFinAngle = self.mFinConfig.get('maxFinAngleDeg', 30.0)     # Max fin deflection in degrees
         self.mServoNeutralAngle = 90.0                                       # Servo angle that corresponds to 0 fin deflection
+        self.mFinFilterTau = self.mFinConfig.get('finFilterTauInSeconds', 0.3)
 
         # Init fin servo via gpiozero + pigpio for jitter-free PWM
         servoPin = self.mFinConfig.get('servoGpioPin', 12)
@@ -151,6 +153,7 @@ class MotorManager(threading.Thread):
         self.mMotorWriteInterval = self.mConfigurator['motorWriteRateInMilliseconds'] / 1000
         self.mMotorReadInterval = self.mConfigurator['motorReadRateInMilliseconds'] / 1000
         self.mFinControlInterval = self.mFinConfig.get('controlRateInMilliseconds', 50) / 1000
+        self.mFinAngleFilter = RCFilter.RCFilter(self.mFinFilterTau, self.mFinControlInterval)
         self.mNextCommandReadTime = 0
         self.mNextMotorWriteTime = 0
         self.mNextMotorReadTime = 0
@@ -521,6 +524,7 @@ class MotorManager(threading.Thread):
                 if self.mFinOpenLoop:
                     # Transition from steering to hold — latch now
                     self.mHeadingSetpoint = self.mKayakHeading
+                    self.mFinAngleFilter.Clear()
                     self.mLogger.debug('Setpoint LATCH  heading=%.2f', self.mHeadingSetpoint)
                 self.mFinOpenLoop = False
         else:
@@ -534,9 +538,10 @@ class MotorManager(threading.Thread):
         If closed-loop (heading hold): compute error and drive fin to maintain setpoint.
         """
         if self.mFinOpenLoop:
-            # Open-loop angle already computed in _UpdateHeadingSetpoint
-            self._SetFinAngle(self.mFinAngle)
-            self.mLogger.debug('FinCtrl OPEN_LOOP  fin_angle=%.2f', self.mFinAngle)
+            # Open-loop angle already computed in _UpdateHeadingSetpoint — smooth it
+            filteredFinAngle = self.mFinAngleFilter.Feed(self.mFinAngle)
+            self._SetFinAngle(filteredFinAngle)
+            self.mLogger.debug('FinCtrl OPEN_LOOP  raw=%.2f  filtered=%.2f', self.mFinAngle, filteredFinAngle)
         else:
             # Closed-loop heading hold
             # Wrap-safe heading error: result in [-180, 180]

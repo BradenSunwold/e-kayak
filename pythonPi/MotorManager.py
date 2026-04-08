@@ -119,6 +119,7 @@ class MotorManager(threading.Thread):
 
         # Init RPM rate limiter (RC filter replaces FIR for simpler config)
         self.mRpmFilterTau = self.mConfigurator.get('rpmFilterTauInSeconds', 1.3)
+        self.mMotorWriteInterval = self.mConfigurator['motorWriteRateInMilliseconds'] / 1000
         self.mRateLimiter = RCFilter.RCFilter(self.mRpmFilterTau, self.mMotorWriteInterval)
         self.mRateLimiter.Clear()
 
@@ -150,7 +151,6 @@ class MotorManager(threading.Thread):
         # Set up scheduler
         self.mScheduler = sched.scheduler(time.time, time.sleep)
         self.mCommandReadInterval = self.mConfigurator['motorCommandReadRateInMilliseconds'] / 1000
-        self.mMotorWriteInterval = self.mConfigurator['motorWriteRateInMilliseconds'] / 1000
         self.mMotorReadInterval = self.mConfigurator['motorReadRateInMilliseconds'] / 1000
         self.mFinControlInterval = self.mFinConfig.get('controlRateInMilliseconds', 50) / 1000
         self.mFinAngleFilter = RCFilter.RCFilter(self.mFinFilterTau, self.mFinControlInterval)
@@ -524,7 +524,6 @@ class MotorManager(threading.Thread):
                 if self.mFinOpenLoop:
                     # Transition from steering to hold — latch now
                     self.mHeadingSetpoint = self.mKayakHeading
-                    self.mFinAngleFilter.Clear()
                     self.mLogger.debug('Setpoint LATCH  heading=%.2f', self.mHeadingSetpoint)
                 self.mFinOpenLoop = False
         else:
@@ -549,8 +548,10 @@ class MotorManager(threading.Thread):
             self.mLogger.debug('FinCtrl CLOSED_LOOP  setpoint=%.2f  heading=%.2f  error=%.2f',
                                self.mHeadingSetpoint, self.mKayakHeading, headingError)
 
-            # TODO: PID controller — for now center the fin
-            self._SetFinAngle(0.0)
+            # TODO: PID controller — for now filter the fin back to center
+            filteredFinAngle = self.mFinAngleFilter.Feed(0.0)
+            self._SetFinAngle(filteredFinAngle)
+            self.mLogger.debug('FinCtrl CLOSED_LOOP  filtered=%.2f', filteredFinAngle)
 
     def FinControlLoop(self):
         """Scheduled entry point for the fin control pipeline."""

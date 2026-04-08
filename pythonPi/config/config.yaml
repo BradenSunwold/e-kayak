@@ -101,7 +101,7 @@ motorManager:
   finController:
     controlRateInMilliseconds: 100
     pitchDeadbandDeg: 10.0
-    openLoopGain: 0.85             # Fin degrees per degree of oar pitch
+    openLoopGain: 1.0             # Fin degrees per degree of oar pitch
     maxFinAngleDeg: 30.0          # Max fin deflection in degrees (±30)
     servoGpioPin: 12
     finFilterTauInSeconds: 0.3    # RC filter time constant for smoothing fin angle commands

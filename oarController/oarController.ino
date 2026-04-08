@@ -661,7 +661,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
           case eSpeedPercentage :                                   // Check for reported speed percentage
             speedPercentageReported = kayakStatusMsg.fStatusData;
-            
+
             // Only send update to display if speed actually changed
             if(speedPercentageReported != previousSpeedPercentageReported)
             {
@@ -751,7 +751,7 @@ static void ProcessOutputsTask( void *pvParameters )
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
           // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
-          ledMsg = 
+          ledMsg =
           {
             .fFrameGenerator = PulseFrameGeneratorBlue,
             .fDelayInMs = 100,
@@ -841,10 +841,17 @@ static void LedPixelUpdaterTask( void *pvParameters )
       if(pixelMap.fNumCyclesBlock > 0)
       {
         pixelMap.fNumCyclesBlock--;
-      }
-      else
-      {
-        pixelMap.fNumCyclesBlock = 0;
+
+        // Blocking animation just finished - drain queue and keep only the latest entry
+        if(pixelMap.fNumCyclesBlock <= 0)
+        {
+          LedMap_t drainedMsg;
+          while(xQueueReceive(ledPixelMapQueue, (void *)&drainedMsg, 0) == pdTRUE)
+          {
+            pixelMap = drainedMsg;
+          }
+          cycleCount = 0;
+        }
       }
     }
 
@@ -1308,7 +1315,7 @@ void setup()
   radio.openWritingPipe(address[0]); 
   radio.setPALevel(RF24_PA_LOW);
   radio.setDataRate(RF24_2MBPS);      // default - RF24_1MBPS
-  radio.setRetries(3, 6);             // Need to test with Rx and Tx running on motor and oar
+  radio.setRetries(3, 7);             // Need to test with Rx and Tx running on motor and oar
   radio.enableDynamicPayloads();
   // radio.setChannel(90);
   // radio.setAutoAck(false);
@@ -1351,7 +1358,7 @@ void setup()
   kayakStatusQueue = xQueueCreate(msgQueueLength, sizeof(KayakFeedbackMsg_t));
   currentStateQueue = xQueueCreate(msgQueueLength, sizeof(PaddleCmdMsg_t));
   rfOutMsgQueue = xQueueCreate(msgQueueLength, sizeof(PaddleCmdMsg_t));
-  ledPixelMapQueue = xQueueCreate(msgQueueLength, sizeof(LedMap_t));
+  ledPixelMapQueue = xQueueCreate(msgQueueLength * 2, sizeof(LedMap_t));
 
   // Set all task call rates
   // gReadImuTaskRateInMs = 10; 

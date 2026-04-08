@@ -504,11 +504,16 @@ class MotorManager(threading.Thread):
             # Manual mode — oar pitch drives steering intent
             if abs(self.mOarPitch) > self.mPitchDeadbandDeg:
                 # Open-loop: proportionally map oar pitch to fin angle in degrees
+                # Subtract the deadband so effective pitch starts at 0 once outside the deadband
                 # Positive oar pitch = left turn intent = negative fin angle (invert)
                 self.mFinOpenLoop = True
+                if self.mOarPitch > 0:
+                    effectivePitch = self.mOarPitch - self.mPitchDeadbandDeg
+                else:
+                    effectivePitch = self.mOarPitch + self.mPitchDeadbandDeg
                 self.mFinAngle = max(-self.mMaxFinAngle,
                                      min(self.mMaxFinAngle,
-                                         -self.mOarPitch * self.mOpenLoopGain))
+                                         -effectivePitch * self.mOpenLoopGain))
                 self.mLogger.debug('Setpoint STEERING  oar_pitch=%.2f  fin_angle=%.2f',
                                    self.mOarPitch, self.mFinAngle)
             else:

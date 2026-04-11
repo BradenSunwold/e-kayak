@@ -5,6 +5,7 @@ import threading
 import queue
 from pyrf24 import RF24, RF24_PA_LOW, RF24_2MBPS
 from EventTimer import EventTimer
+from KayakDefines import MotorMode
 
 
 class RfManager(threading.Thread):
@@ -19,8 +20,8 @@ class RfManager(threading.Thread):
         self.mIncomingQueue = incomingQueue
         self.mOutgoingQueue = outgoingQueue
         self.mOarImuQueue = oarImuQueue  # Forwards oar pitch/roll/yaw to motor thread
-        self.mRfReceiveFormatManual = 'B?Bfff'
-        self.mRfReceiveFormatAuto = 'B?Bffffff'
+        self.mRfReceiveFormatManual = 'BBBfff'
+        self.mRfReceiveFormatAuto = 'BBBffffff'
         self.mCurrentMotorMode = 0
         self.mCurrentMotorSpeed = 0
 
@@ -139,6 +140,14 @@ class RfManager(threading.Thread):
                     self.mLogger.debug('Roll: %.4f', self.mCurrentRoll)
                     self.mLogger.debug('Pitch: %.4f', self.mCurrentPitch)
                     self.mLogger.debug('Yaw: %.4f', self.mCurrentYaw)
+
+                    if self.mInfluxWriter:
+                        self.mInfluxWriter.write_point("imu", {
+                            "roll": self.mCurrentRoll,
+                            "pitch": self.mCurrentPitch,
+                            "yaw": self.mCurrentYaw,
+                            "speed_cmd": self.mCurrentMotorSpeed,
+                        }, tags={"mode": "manual"})
                 elif length == autoSize:
                     self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveFormatAuto, received)
 
@@ -152,6 +161,7 @@ class RfManager(threading.Thread):
                     self.mLogger.debug('Z Gyroscope: %.4f', self.mCurrentGyroZ)
 
                     if self.mInfluxWriter:
+                        modeTag = "training" if self.mCurrentMotorMode == MotorMode.TRAINING else "auto"
                         self.mInfluxWriter.write_point("imu", {
                             "accel_x": self.mCurrentAccelX,
                             "accel_y": self.mCurrentAccelY,
@@ -160,17 +170,17 @@ class RfManager(threading.Thread):
                             "gyro_y": self.mCurrentGyroY,
                             "gyro_z": self.mCurrentGyroZ,
                             "speed_cmd": self.mCurrentMotorSpeed,
-                        }, tags={"mode": "auto"})
+                        }, tags={"mode": modeTag})
                 else:
                     self.mLogger.error('RfReceive unexpected packet length: %d bytes', length)
                     raise ValueError('unexpected packet length: %d' % length)
 
                 # Always forward motor commands to MotorManager as heartbeat
-                motorModeCommand = struct.pack("?B", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
+                motorModeCommand = struct.pack("BB", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
                 self.mOutgoingQueue.put(motorModeCommand)
 
                 # Forward oar IMU data to motor thread for fin control (manual mode has roll/pitch/yaw)
-                if not self.mCurrentMotorMode:
+                if self.mCurrentMotorMode == MotorMode.MANUAL:
                     oarImuPayload = struct.pack('fff', self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw)
                     self.mOarImuQueue.put(oarImuPayload)
 

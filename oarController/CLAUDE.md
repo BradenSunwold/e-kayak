@@ -37,9 +37,10 @@ Tasks communicate via FreeRTOS queues (6 total) and semaphores.
 - **Data rate:** RF24_2MBPS / **Power:** RF24_PA_LOW
 - **Max payload:** 32 bytes
 - Dynamic payloads enabled; 4 retries
-- **Mode-based single packet:** Each TX cycle sends one self-describing packet. The mode byte (`fAutoMode`) tells the Pi how to parse the payload:
-  - **Manual** (`RfManualMsg_t`, 15 bytes): `[index, autoMode=false, speed, roll, pitch, yaw]`
-  - **Auto** (`RfAutoMsg_t`, 27 bytes): `[index, autoMode=true, speed, accelX, gyroX, accelY, gyroY, accelZ, gyroZ]`
+- **Mode-based single packet:** Each TX cycle sends one self-describing packet. The mode byte (`fMode`, uint8 `MotorMode_t`) tells the Pi how to parse the payload:
+  - **Manual** (`RfManualMsg_t`, 15 bytes): `[index, mode=0, speed, roll, pitch, yaw]`
+  - **Auto** (`RfAutoMsg_t`, 27 bytes): `[index, mode=1, speed, accelX, gyroX, accelY, gyroY, accelZ, gyroZ]`
+  - **Training** (reuses `RfAutoMsg_t`, 27 bytes): `[index, mode=2, speed=0, accelX, gyroX, accelY, gyroY, accelZ, gyroZ]` — automatically entered when manual mode + speed=0
 
 ## Important Constraints
 

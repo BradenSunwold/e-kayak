@@ -16,10 +16,18 @@
 #define debugSerialPrint(...)    do { if (Serial) Serial.print(__VA_ARGS__);   } while(0)
 #define debugSerialPrintln(...)  do { if (Serial) Serial.println(__VA_ARGS__); } while(0)
 
+// Motor mode — shared with pythonPi (KayakDefines.py MotorMode)
+typedef enum : uint8_t
+{
+  MOTOR_MODE_MANUAL = 0,
+  MOTOR_MODE_AUTO = 1,
+  MOTOR_MODE_TRAINING = 2
+} MotorMode_t;
+
 // Global flags
 volatile bool gMotorFaultFlag = false;
 volatile bool gComsTimeoutFlag = true;   // Initialize to true on boot until RF modules connect
-volatile bool gAutoMode = false;
+volatile MotorMode_t gMotorMode = MOTOR_MODE_TRAINING;
 
 // RF TX retry tracking
 volatile uint32_t gRfTxCount = 0;
@@ -73,8 +81,8 @@ typedef struct
 
 typedef struct
 {
-  bool fAutoMode;
-  uint8_t fSpeed;     // 0 - 3 (off, low, medium, high)
+  MotorMode_t fMode;
+  uint8_t fSpeed;       // 0 - 3 (off, low, medium, high)
 } PaddleCmdMsg_t;
 
 typedef struct
@@ -126,29 +134,29 @@ volatile bool gImuTimeout = false;
 
 
 //######################** Support functions ****************************//
-void SetImuReports(bool autoMode)
+void SetImuReports(MotorMode_t mode)
 {
   long reportIntervalUs = 10000;    // 100 Hz oversample rate (5x the 20 Hz TX rate)
 
   debugSerialPrint("Setting IMU reports for mode: ");
-  debugSerialPrintln(autoMode ? "AUTO" : "MANUAL");
+  debugSerialPrintln(mode == MOTOR_MODE_MANUAL ? "MANUAL" : (mode == MOTOR_MODE_AUTO ? "AUTO" : "TRAINING"));
 
-  if (autoMode)
-  {
-    // Auto mode: raw accel + gyro only — disable fused orientation
-    bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 0);
-    if (!bno08x.enableReport(SH2_ACCELEROMETER, reportIntervalUs))
-      debugSerialPrintln("Could not enable accelerometer");
-    if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, reportIntervalUs))
-      debugSerialPrintln("Could not enable gyroscope");
-  }
-  else
+  if (mode == MOTOR_MODE_MANUAL)
   {
     // Manual mode: fused orientation only — disable raw sensors
     if (!bno08x.enableReport(SH2_ARVR_STABILIZED_RV, reportIntervalUs))
       debugSerialPrintln("Could not enable stabilized rotation vector");
     bno08x.enableReport(SH2_ACCELEROMETER, 0);
     bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, 0);
+  }
+  else
+  {
+    // Auto / Training mode: raw accel + gyro only — disable fused orientation
+    bno08x.enableReport(SH2_ARVR_STABILIZED_RV, 0);
+    if (!bno08x.enableReport(SH2_ACCELEROMETER, reportIntervalUs))
+      debugSerialPrintln("Could not enable accelerometer");
+    if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED, reportIntervalUs))
+      debugSerialPrintln("Could not enable gyroscope");
   }
 }
 
@@ -267,7 +275,7 @@ static void ReadImuTask( void *pvParameters )
   bool gyroDataFreshFlag = false;
 
   // Local copy of mode — used to detect transitions and reconfigure IMU
-  bool localAutoMode = false;
+  MotorMode_t localMode = MOTOR_MODE_TRAINING;
 
   while(1)
   {
@@ -279,10 +287,10 @@ static void ReadImuTask( void *pvParameters )
        xTimerReset(imuWatchdogTimer, 0);
 
       // Detect mode change and reconfigure IMU reports
-      if (gAutoMode != localAutoMode)
+      if (gMotorMode != localMode)
       {
-        localAutoMode = gAutoMode;
-        SetImuReports(localAutoMode);
+        localMode = gMotorMode;
+        SetImuReports(localMode);
         // Clear stale data from the previous mode
         fusedDataFreshFlag = false;
         accelDataFreshFlag = false;
@@ -293,7 +301,7 @@ static void ReadImuTask( void *pvParameters )
       if (bno08x.wasReset() || gImuTimeout)
       {
         debugSerialPrint("sensor was reset ");
-        SetImuReports(localAutoMode);
+        SetImuReports(localMode);
         gImuTimeout = false;
       }
 
@@ -306,7 +314,7 @@ static void ReadImuTask( void *pvParameters )
         if (bno08x.wasReset())
         {
           debugSerialPrint("sensor was reset ");
-          SetImuReports(localAutoMode);
+          SetImuReports(localMode);
         }
         
         switch (sensorData.sensorId) 
@@ -340,10 +348,10 @@ static void ReadImuTask( void *pvParameters )
 
       }
 
-      // In manual mode only fused orientation is needed; in auto mode only accel + gyro
-      bool dataReady = localAutoMode
-        ? (accelDataFreshFlag && gyroDataFreshFlag)
-        : fusedDataFreshFlag;
+      // Manual mode needs fused orientation; auto and training need accel + gyro
+      bool dataReady = (localMode == MOTOR_MODE_MANUAL)
+        ? fusedDataFreshFlag
+        : (accelDataFreshFlag && gyroDataFreshFlag);
 
       if (dataReady)
       {
@@ -374,8 +382,12 @@ static void ButtonInputTask( void *pvParameters )
 
   // Initialize button state message
   PaddleCmdMsg_t currButtonState;
-  currButtonState.fAutoMode = false;
+  currButtonState.fMode = MOTOR_MODE_TRAINING;
   currButtonState.fSpeed = 0;
+
+  // Track user-selected mode (manual vs auto) separately from transmitted mode.
+  // When userMode is manual and speed==0, transmitted mode becomes TRAINING automatically.
+  bool userAutoMode = false;
 
   volatile TickType_t lastDebounceTimeInMs = 0;     // the last time the output pin was toggled
   volatile TickType_t debounceDelayInMs = 0;        // debounce time; increase if the output flickers - set to 0 since task running at 50ms period
@@ -401,13 +413,19 @@ static void ButtonInputTask( void *pvParameters )
         } else {
           currButtonState.fSpeed++;
         }
+        // Auto-switch training mode when manual + speed==0
+        if (!userAutoMode) {
+          currButtonState.fMode = (currButtonState.fSpeed == 0) ? MOTOR_MODE_TRAINING : MOTOR_MODE_MANUAL;
+          gMotorMode = currButtonState.fMode;
+        }
         xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
       }
       else if (c == 'd') {
         debugSerialPrintln("MOCK: DOUBLE");
-        currButtonState.fAutoMode = !currButtonState.fAutoMode;
+        userAutoMode = !userAutoMode;
         currButtonState.fSpeed = 0;
-        gAutoMode = currButtonState.fAutoMode;   // Update IMU task immediately, don't wait for queue chain
+        currButtonState.fMode = userAutoMode ? MOTOR_MODE_AUTO : MOTOR_MODE_TRAINING;
+        gMotorMode = currButtonState.fMode;
         xQueueSend(currentStateQueue, (void *)&currButtonState, 0);
       }
     }
@@ -449,22 +467,21 @@ static void ButtonInputTask( void *pvParameters )
       // Double button press = 4 state changes (on / off, on / off)
       if(buttonStateChangeCount > 2)
       {
-        // Found double click
+        // Found double click — toggle between manual and auto
         debugSerialPrintln("DOUBLE");
 
-        // Update the current state
-        currButtonState.fAutoMode = !currButtonState.fAutoMode;
+        userAutoMode = !userAutoMode;
         currButtonState.fSpeed = 0;
-        gAutoMode = currButtonState.fAutoMode;   // Update IMU task immediately, don't wait for queue chain
+        currButtonState.fMode = userAutoMode ? MOTOR_MODE_AUTO : MOTOR_MODE_TRAINING;
+        gMotorMode = currButtonState.fMode;
         eventOccurred = true;
       }
       // Single button press = 2 state changes (on / off)
       else if(buttonStateChangeCount > 1)
       {
-        // Found single click
+        // Found single click — cycle speed
         debugSerialPrintln("SINGLE");
 
-        // Update the current state
         if(currButtonState.fSpeed == 3)
         {
           currButtonState.fSpeed = 0;
@@ -473,6 +490,11 @@ static void ButtonInputTask( void *pvParameters )
         {
           currButtonState.fSpeed++;
         }
+        // Auto-switch training mode when manual + speed==0
+        if (!userAutoMode) {
+          currButtonState.fMode = (currButtonState.fSpeed == 0) ? MOTOR_MODE_TRAINING : MOTOR_MODE_MANUAL;
+          gMotorMode = currButtonState.fMode;
+        }
         eventOccurred = true;
       }
 
@@ -480,11 +502,12 @@ static void ButtonInputTask( void *pvParameters )
       // Only send if the latch actually changed something, to avoid queue spam.
       if(gMotorFaultFlag || gComsTimeoutFlag)
       {
-        if(currButtonState.fSpeed != 0 || currButtonState.fAutoMode != false)
+        if(currButtonState.fSpeed != 0 || currButtonState.fMode != MOTOR_MODE_TRAINING)
         {
           currButtonState.fSpeed = 0;
-          currButtonState.fAutoMode = false;
-          gAutoMode = false;
+          currButtonState.fMode = MOTOR_MODE_TRAINING;
+          userAutoMode = false;
+          gMotorMode = MOTOR_MODE_TRAINING;
           eventOccurred = true;
         }
       }
@@ -514,7 +537,7 @@ static void ProcessOutputsTask( void *pvParameters )
 
   bool connectingFlag = false;
 
-  bool autoMode = false;
+  MotorMode_t localMode = MOTOR_MODE_TRAINING;
   float speedPercentageReported = 0;
   float previousSpeedPercentageReported = 0;
   float speedPercentageCommanded = 0; 
@@ -741,12 +764,16 @@ static void ProcessOutputsTask( void *pvParameters )
     // Next check current state and report to LED driver / RF out any changes
     if(xQueueReceive(currentStateQueue, (void *)&paddleCmdMsg, 0) == pdTRUE)
     {
-      if((paddleCmdMsg.fAutoMode && !autoMode) || (!paddleCmdMsg.fAutoMode && autoMode))
+      // Detect user-initiated mode change (manual/training <-> auto) for LED animation.
+      // Training <-> manual transitions are automatic and don't trigger the blue pulse.
+      bool wasAuto = (localMode == MOTOR_MODE_AUTO);
+      bool isAuto = (paddleCmdMsg.fMode == MOTOR_MODE_AUTO);
+
+      if(wasAuto != isAuto)
       {
-        // Toggle autoMode and sync speed
-        autoMode = paddleCmdMsg.fAutoMode;
+        // User toggled between manual/auto — sync mode and speed
+        localMode = (MotorMode_t)paddleCmdMsg.fMode;
         speedPercentageCommanded = paddleCmdMsg.fSpeed;
-        gAutoMode = autoMode;   // Signal ReadImuTask to reconfigure IMU reports
 
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
@@ -759,7 +786,7 @@ static void ProcessOutputsTask( void *pvParameters )
             .fNumFrames = LED_COUNT
           };
           debugSerialPrint("Mode: ");
-          debugSerialPrintln(paddleCmdMsg.fAutoMode);
+          debugSerialPrintln(paddleCmdMsg.fMode);
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
 
           // Queue gauge display after pulse so it doesn't loop indefinitely
@@ -778,7 +805,8 @@ static void ProcessOutputsTask( void *pvParameters )
       }
       else if(paddleCmdMsg.fSpeed != speedPercentageCommanded)
       {
-        speedPercentageCommanded = paddleCmdMsg.fSpeed;                            // Update local speed checker variable
+        localMode = (MotorMode_t)paddleCmdMsg.fMode;
+        speedPercentageCommanded = paddleCmdMsg.fSpeed;
 
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
@@ -957,7 +985,7 @@ static void RfRadioTask( void *pvParameters )
   PaddleCmdMsg_t PaddleCmdOut;
 
   // Initialize state data
-  PaddleCmdOut.fAutoMode = false;
+  PaddleCmdOut.fMode = MOTOR_MODE_TRAINING;
   PaddleCmdOut.fSpeed = 0;
 
   FullImuDataSet_t imuDataOut;
@@ -1031,17 +1059,18 @@ static void RfRadioTask( void *pvParameters )
       radio.stopListening();    // put radio in TX mode
 
       // Send single packet based on current mode
+      // Manual sends euler angles; auto and training send raw accel/gyro
       messageIndex++;
       bool txResult;
-      if(PaddleCmdOut.fAutoMode)
-      {
-        autoMsg.fMessageIndex = messageIndex;
-        txResult = radio.write(&autoMsg, sizeof(autoMsg));
-      }
-      else
+      if(PaddleCmdOut.fMode == MOTOR_MODE_MANUAL)
       {
         manualMsg.fMessageIndex = messageIndex;
         txResult = radio.write(&manualMsg, sizeof(manualMsg));
+      }
+      else
+      {
+        autoMsg.fMessageIndex = messageIndex;
+        txResult = radio.write(&autoMsg, sizeof(autoMsg));
       }
       if (!txResult) {
         gRfTxFailCount++;
@@ -1346,7 +1375,7 @@ void setup()
     }
   }
   debugSerialPrintln("BNO08x Found!");
-  SetImuReports(gAutoMode);
+  SetImuReports(gMotorMode);
 
   // SETUP NEOPIXELS
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)

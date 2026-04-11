@@ -16,6 +16,7 @@ import PIDController
 
 from KayakDefines import StatusType
 from KayakDefines import VescFaultCodes
+from KayakDefines import MotorMode
 
 
 class FaultType(IntEnum):
@@ -66,7 +67,8 @@ class MotorManager(threading.Thread):
 
         # Variables coming from RF manager
         self.mMotorSpeedManual = 0
-        self.mMode = 0
+        self.mMode = MotorMode.TRAINING
+        self.mPreviousMode = MotorMode.TRAINING
 
         # Variables coming from ML model
         self.mEstimatedSpeed = 0.0
@@ -328,16 +330,16 @@ class MotorManager(threading.Thread):
                 break
 
         if latestCommand is not None:
-            tmpMode, tmpRpm = struct.unpack('?B', latestCommand)
+            tmpMode, tmpRpm = struct.unpack('BB', latestCommand)
 
             numberSpeeds = self.mConfigurator['numberOfSpeedSettings']
 
             if(tmpRpm < numberSpeeds) :
-                self.mMode = tmpMode
+                self.mMode = MotorMode(tmpMode)
                 self.mMotorSpeedManual = tmpRpm
                 self.mLastOarMessageTime = time.time()
 
-                self.mLogger.debug('Oar Mode Command: %s', self.mMode)
+                self.mLogger.debug('Oar Mode Command: %s', self.mMode.name)
                 self.mLogger.debug('Oar Speed Command: %s', self.mMotorSpeedManual)
             else :
                 self.mLogger.info("Received invalid motor commands")
@@ -361,15 +363,17 @@ class MotorManager(threading.Thread):
             else:
                 self.mLogger.info('Soft fault = 0 RPM')
         # Check which mode we are in and calculate RPM
-        elif self.mMode == 0 :
-            # We are in manual mode - use speed lookup table
+        elif self.mMode == MotorMode.MANUAL:
             self.mRpm = (self.mSpeedSettingToRpmMap[self.mMotorSpeedManual] / 100) * self.mMaxRpms
-            self.mLogger.debug('In Mode 0')
-        else :
-            # Use estimated speed based on ML model
+            self.mLogger.debug('In Mode MANUAL')
+        elif self.mMode == MotorMode.TRAINING:
+            self.mRpm = 0.0
+            self.mLogger.debug('In Mode TRAINING')
+        else:
+            # Auto mode — use estimated speed based on ML model
             # self.mRpm = self.mEstimatedSpeed
-            self.mMode = 0      # For now, force manual mode
-            self.mLogger.debug('Force Mode 0')
+            self.mMode = MotorMode.MANUAL  # For now, force manual mode
+            self.mLogger.debug('Force Mode MANUAL')
 
         # If we are in a startup, ignore all faults and commands - Force a reversal for X seconds
         if(self.mStartupLatched == True) :
@@ -524,7 +528,15 @@ class MotorManager(threading.Thread):
         self._ReadKayakImu()
         self._ReadOarImu()
 
-        if self.mMode == 0:
+        if self.mMode == MotorMode.MANUAL:
+            # Transition into manual — latch current heading so we don't hold a stale setpoint
+            if self.mPreviousMode != MotorMode.MANUAL:
+                self.mHeadingSetpoint = self.mKayakHeading
+                self.mHeadingPid.Reset()
+                self.mFinAngleFilter.Clear()
+                self.mLogger.info('Entered MANUAL from %s — latch heading=%.2f',
+                                  self.mPreviousMode.name, self.mHeadingSetpoint)
+
             # Manual mode — oar pitch drives steering intent
             if abs(self.mOarPitch) > self.mPitchDeadbandDeg:
                 # Open-loop: proportionally map oar pitch to fin angle in degrees
@@ -548,9 +560,15 @@ class MotorManager(threading.Thread):
                     self.mHeadingPid.Reset()
                     self.mLogger.debug('Setpoint LATCH  heading=%.2f', self.mHeadingSetpoint)
                 self.mFinOpenLoop = False
+        elif self.mMode == MotorMode.TRAINING:
+            # Training mode — no fin control, center fin
+            self.mFinOpenLoop = False
+            self.mFinAngle = 0.0
         else:
             # Auto mode — ML provides setpoint (placeholder)
             self.mFinOpenLoop = False
+
+        self.mPreviousMode = self.mMode
 
     def _FinController(self):
         """Pure heading controller. Computes fin angle from setpoint and feedback, writes to servo.

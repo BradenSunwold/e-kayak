@@ -13,6 +13,11 @@ class StatusType(IntEnum):
   eOverTemp = 7
   eVescComsLoss = 8
   
+class MotorMode(IntEnum):
+  MANUAL = 0
+  AUTO = 1
+  TRAINING = 2
+
 class MotorCmd(IntEnum):
   eModeCmd = 0
   eSpeedCmd = 1

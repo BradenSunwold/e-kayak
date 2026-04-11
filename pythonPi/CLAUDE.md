@@ -34,7 +34,7 @@ Python-based controller running on a Raspberry Pi 5. This is the main kayak-side
 ## Important Constraints
 
 - **`StatusType` in `KayakDefines.py` is a shared protocol struct** — it defines what is transmitted from the Pi to the oar remote controller. Any changes to `StatusType` require a matching update in the oar controller project. The oar side only needs to know there is a fault so it can flash red and stop commanding.
-- **RF RX parsing is mode-based** — `RfManager.py` reads the mode byte from each incoming packet to decide the format: manual (`B?Bfff`, 15 bytes) or auto (`B?Bffffff`, 27 bytes). Changes to the oar-side `RfManualMsg_t` / `RfAutoMsg_t` structs require matching updates to the format strings here.
+- **RF RX parsing is mode-based** — `RfManager.py` reads the mode byte (uint8) from each incoming packet. Three modes defined in `MotorMode` enum (`KayakDefines.py`): MANUAL=0 (`BBBfff`, 16 bytes, roll/pitch/yaw), AUTO=1 (`BBBffffff`, 28 bytes, accel/gyro), TRAINING=2 (same 28-byte format as auto). Training mode is automatically entered by the oar when in manual mode with speed=0; motor is off and fin is centered. Changes to oar-side structs require matching updates to the format strings here.
 
 ## Key Files
 

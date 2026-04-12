@@ -118,5 +118,6 @@ imuManager:
   i2cBus: 3
   calibrationFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/config/bno055_calibration.json
   imuReadRateInMilliseconds: 50
+  imuReadDropThresholdHz: 17.0
   imuLoggerVerbosityLevel: DEBUG
   imuLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/imuLog.txt

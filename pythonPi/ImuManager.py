@@ -7,10 +7,11 @@ import queue
 from pathlib import Path
 from adafruit_extended_bus import ExtendedI2C
 import adafruit_bno055
+from EventTimer import EventTimer
 
 
 class ImuManager(threading.Thread):
-    def __init__(self, configDictionary, logger, outgoingQueue, influxWriter=None):
+    def __init__(self, configDictionary, logger, outgoingQueue, rawQueue=None, influxWriter=None):
         super().__init__()
         self.mLogger = logger
         self.mInfluxWriter = influxWriter
@@ -19,6 +20,9 @@ class ImuManager(threading.Thread):
 
         # Queue to send heading data to motor thread
         self.mOutgoingQueue = outgoingQueue
+
+        # Queue to send raw accel/gyro data to ML thread
+        self.mRawQueue = rawQueue
 
         # Parse configs
         self.mConfigurator = configDictionary
@@ -29,6 +33,13 @@ class ImuManager(threading.Thread):
         self.mScheduler = sched.scheduler(time.time, time.sleep)
         self.mReadInterval = self.mConfigurator['imuReadRateInMilliseconds'] / 1000
         self.mNextReadTime = 0
+
+        # Rate tracking
+        self.mEventTimer = EventTimer(self.mLogger)
+        self.mReadTotalCount = 0
+        self.mReadDropCount = 0
+        self.mReadDropLogInterval = 100
+        self.mReadDropThresholdHz = self.mConfigurator['imuReadDropThresholdHz']
 
         # Shutdown flag
         self.mShutdownRequested = False
@@ -64,19 +75,56 @@ class ImuManager(threading.Thread):
 
         try:
             euler = self.mSensor.euler
+            accel = self.mSensor.acceleration
+            gyro = self.mSensor.gyro
             sys_cal, gyro_cal, accel_cal, mag_cal = self.mSensor.calibration_status
 
             if euler[0] is not None:
                 heading, roll, pitch = euler
+                ax, ay, az = accel
+                gx, gy, gz = gyro
 
                 # Pack heading as a float and send to motor thread
                 payload = struct.pack('f', heading)
                 self.mOutgoingQueue.put(payload)
 
+                # Pack raw accel/gyro and send to ML thread
+                if self.mRawQueue is not None:
+                    rawPayload = struct.pack('ffffff', ax, ay, az, gx, gy, gz)
+                    self.mRawQueue.put(rawPayload)
+
                 self.mLogger.debug('Kayak IMU  heading=%.2f  roll=%.2f  pitch=%.2f  '
+                                   'accel=[%.2f, %.2f, %.2f]  gyro=[%.2f, %.2f, %.2f]  '
                                    'cal[sys=%d gyro=%d accel=%d mag=%d]',
                                    heading, roll, pitch,
+                                   ax, ay, az, gx, gy, gz,
                                    sys_cal, gyro_cal, accel_cal, mag_cal)
+
+                # Rate tracking
+                result = self.mEventTimer.mark('imu_read')
+                if result is not None:
+                    delta, rate, stats = result
+                    self.mReadTotalCount += 1
+                    if rate < self.mReadDropThresholdHz:
+                        self.mReadDropCount += 1
+                    if self.mReadTotalCount % self.mReadDropLogInterval == 0:
+                        self.mLogger.info(
+                            'imu_read drops below %g Hz: %d / %d (%.1f%%)',
+                            self.mReadDropThresholdHz,
+                            self.mReadDropCount, self.mReadTotalCount,
+                            100.0 * self.mReadDropCount / self.mReadTotalCount
+                        )
+
+                    if self.mInfluxWriter:
+                        dropPct = (100.0 * self.mReadDropCount / self.mReadTotalCount) if self.mReadTotalCount > 0 else 0.0
+                        self.mInfluxWriter.write_point("kayak_imu", {
+                            "read_rate_hz": rate,
+                            "read_delta_ms": delta * 1000.0,
+                            "read_drop_count": self.mReadDropCount,
+                            "read_total_count": self.mReadTotalCount,
+                            "read_drop_pct": dropPct,
+                            "read_jitter_ms": stats['std'] * 1000.0,
+                        })
             else:
                 self.mLogger.debug('Kayak IMU not ready yet')
 

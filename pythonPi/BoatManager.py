@@ -87,10 +87,11 @@ def main():
     rfToMotorQueue = queue.Queue()
     oarImuToMotorQueue = queue.Queue()
     imuToMotorQueue = queue.Queue()
+    imuRawToMlQueue = queue.Queue()
 
     # Create manager objects
     rfManager = RfManager(config['rfManager'], loggerRf, motorToRfQueue, rfToMotorQueue, oarImuToMotorQueue, influxWriter)
-    imuManager = ImuManager(config['imuManager'], loggerImu, imuToMotorQueue, influxWriter)
+    imuManager = ImuManager(config['imuManager'], loggerImu, imuToMotorQueue, rawQueue=imuRawToMlQueue, influxWriter=influxWriter)
     motorManager = MotorManager(config['motorManager'], loggerMotor, rfToMotorQueue, motorToRfQueue,
                                 imuQueue=imuToMotorQueue, oarImuQueue=oarImuToMotorQueue, influxWriter=influxWriter)
 

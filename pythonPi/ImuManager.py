@@ -118,6 +118,19 @@ class ImuManager(threading.Thread):
                     if self.mInfluxWriter:
                         dropPct = (100.0 * self.mReadDropCount / self.mReadTotalCount) if self.mReadTotalCount > 0 else 0.0
                         self.mInfluxWriter.write_point("kayak_imu", {
+                            "heading": heading,
+                            "roll": roll,
+                            "pitch": pitch,
+                            "accel_x": ax,
+                            "accel_y": ay,
+                            "accel_z": az,
+                            "gyro_x": gx,
+                            "gyro_y": gy,
+                            "gyro_z": gz,
+                            "cal_sys": sys_cal,
+                            "cal_gyro": gyro_cal,
+                            "cal_accel": accel_cal,
+                            "cal_mag": mag_cal,
                             "read_rate_hz": rate,
                             "read_delta_ms": delta * 1000.0,
                             "read_drop_count": self.mReadDropCount,

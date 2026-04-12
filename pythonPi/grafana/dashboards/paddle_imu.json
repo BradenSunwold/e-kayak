@@ -1,6 +1,6 @@
 {
-  "title": "IMU",
-  "uid": "ekayak-imu",
+  "title": "Paddle IMU",
+  "uid": "ekayak-paddle-imu",
   "tags": [
     "e-kayak"
   ],

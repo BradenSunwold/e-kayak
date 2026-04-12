@@ -102,16 +102,16 @@ motorManager:
     controlRateInMilliseconds: 100
     pitchDeadbandDeg: 10.0
     openLoopGain: 1.0             # Fin degrees per degree of oar pitch
-    maxFinAngleDeg: 30.0          # Max fin deflection in degrees (±30)
+    maxFinAngleDeg: 25.0          # Max fin deflection in degrees (±30)
     servoGpioPin: 12
     finFilterTauInSeconds: 0.3    # RC filter time constant for smoothing fin angle commands
     headingPid:
       kP: 0.5
       kI: 0.0
       kD: 0.0
-      integralLimit: 15.0
-      outputMinDeg: -30.0
-      outputMaxDeg: 30.0
+      integralLimit: 12.0
+      outputMinDeg: -25.0
+      outputMaxDeg: 25.0
   motorLoggerVerbosityLevel: DEBUG
   motorLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/motorLog.txt
 imuManager:

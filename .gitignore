@@ -5,3 +5,5 @@ pythonPi/lib/
 pythonPi/pyvenv.cfg
 pythonPi/share/
 __pycache__/
+mlTraining/.venv/
+mlTraining/data/

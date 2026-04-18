@@ -602,7 +602,15 @@ class MotorManager(threading.Thread):
             return
 
         self._UpdateHeadingSetpoint()
-        self._FinController()
+
+        if self.mMode == MotorMode.TRAINING:
+            # Training mode — force fin to center, skip PID
+            self._SetFinAngle(0.0)
+            self.mFinAngleFilter.Clear()
+            self.mHeadingPid.Reset()
+            self.mLogger.debug('FinCtrl TRAINING  fin=0.00')
+        else:
+            self._FinController()
 
         if self.mInfluxWriter:
             self.mInfluxWriter.write_point("fin_controller", {

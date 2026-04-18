@@ -2,7 +2,7 @@
 rfManager:
   rfReadDataRateInMilliseconds: 10
   rfWriteDataRateInMilliseconds: 100
-  rfLoggerVerbosityLevel: DEBUG
+  rfLoggerVerbosityLevel: INFO
   rfLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/rfLog.txt
 motorManager:
   motorCommandReadRateInMilliseconds: 50
@@ -128,5 +128,5 @@ mlManager:
   normStatsPath: ../mlTraining/checkpoints/norm_stats.json
   # Emit an INFO prediction line every N samples (DEBUG level still fires every sample)
   inferenceLogIntervalSamples: 5
-  mlLoggerVerbosityLevel: DEBUG
+  mlLoggerVerbosityLevel: INFO
   mlLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/mlLog.txt

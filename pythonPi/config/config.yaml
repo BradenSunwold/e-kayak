@@ -121,3 +121,12 @@ imuManager:
   imuReadDropThresholdHz: 17.0
   imuLoggerVerbosityLevel: DEBUG
   imuLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/imuLog.txt
+mlManager:
+  # Artifact paths are resolved relative to pythonPi/ at runtime
+  modelPath: ../mlTraining/checkpoints/best_model.onnx
+  modelMetaPath: ../mlTraining/checkpoints/best_model_meta.json
+  normStatsPath: ../mlTraining/checkpoints/norm_stats.json
+  # Emit an INFO prediction line every N samples (DEBUG level still fires every sample)
+  inferenceLogIntervalSamples: 5
+  mlLoggerVerbosityLevel: DEBUG
+  mlLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/mlLog.txt

@@ -9,7 +9,8 @@ from KayakDefines import MotorMode
 
 
 class RfManager(threading.Thread):
-    def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue, oarImuQueue, influxWriter=None):
+    def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue, oarImuQueue,
+                 oarRawToMlQueue=None, influxWriter=None):
         super().__init__()
         self.mLogger = logger
         self.mInfluxWriter = influxWriter
@@ -20,6 +21,7 @@ class RfManager(threading.Thread):
         self.mIncomingQueue = incomingQueue
         self.mOutgoingQueue = outgoingQueue
         self.mOarImuQueue = oarImuQueue  # Forwards oar pitch/roll/yaw to motor thread
+        self.mOarRawToMlQueue = oarRawToMlQueue  # Forwards raw accel/gyro to ML thread in AUTO mode
         self.mRfReceiveFormatManual = 'BBBfff'
         self.mRfReceiveFormatAuto = 'BBBffffff'
         self.mCurrentMotorMode = 0
@@ -183,6 +185,16 @@ class RfManager(threading.Thread):
                 if self.mCurrentMotorMode == MotorMode.MANUAL:
                     oarImuPayload = struct.pack('fff', self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw)
                     self.mOarImuQueue.put(oarImuPayload)
+
+                # Forward raw accel/gyro to ML thread for stroke detection (auto mode only)
+                # Channel order matches training CSVs: accel_x/y/z, gyro_x/y/z
+                elif self.mCurrentMotorMode == MotorMode.AUTO and self.mOarRawToMlQueue is not None:
+                    oarRawPayload = struct.pack(
+                        'ffffff',
+                        self.mCurrentAccelX, self.mCurrentAccelY, self.mCurrentAccelZ,
+                        self.mCurrentGyroX, self.mCurrentGyroY, self.mCurrentGyroZ,
+                    )
+                    self.mOarRawToMlQueue.put(oarRawPayload)
 
                 result = self.mEventTimer.mark('rf_rx')
                 if result is not None:

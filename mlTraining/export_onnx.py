@@ -5,7 +5,10 @@ What this does:
 1. Loads checkpoints/best_model.pt
 2. Traces the model with a dummy input of shape (1, NUM_CHANNELS, WINDOW_SIZE)
 3. Writes checkpoints/best_model.onnx
-4. Verifies the ONNX model produces the same output as the torch model (max abs diff)
+4. Writes checkpoints/best_model_meta.json — a sidecar that describes the model's
+   input shape, sample rate, and class labels so the Pi can load the model
+   without duplicating training-side constants
+5. Verifies the ONNX model produces the same output as the torch model (max abs diff)
 
 Usage:
     python export_onnx.py
@@ -18,15 +21,26 @@ Notes on the ONNX graph:
   or batched evaluation.
 """
 
+import json
+
 import numpy as np
 import torch
 
-from config import CHECKPOINT_DIR, NUM_CHANNELS, WINDOW_SIZE
+from config import (
+    CHANNEL_NAMES,
+    CHECKPOINT_DIR,
+    LABEL_MAP,
+    NUM_CHANNELS,
+    SAMPLE_RATE_HZ,
+    WINDOW_SIZE,
+    WINDOW_STRIDE,
+)
 from model import StrokeCNN
 
 
 CHECKPOINT_PATH = CHECKPOINT_DIR / "best_model.pt"
 ONNX_PATH = CHECKPOINT_DIR / "best_model.onnx"
+META_PATH = CHECKPOINT_DIR / "best_model_meta.json"
 
 
 def main():
@@ -84,6 +98,29 @@ def main():
             "Investigate before shipping to the Pi."
         )
     print("Parity check PASSED.")
+
+    # Build class_names in index order so consumers can do class_names[predicted_index].
+    # LABEL_MAP is {name: index}; invert and sort by index.
+    class_names = [name for name, _ in sorted(LABEL_MAP.items(), key=lambda kv: kv[1])]
+
+    # Sidecar metadata — Pi-side code reads this so training-only constants
+    # (window size, sample rate, class labels) don't get duplicated on the Pi.
+    metadata = {
+        "input_name": "imu_window",
+        "output_name": "logits",
+        "num_channels": NUM_CHANNELS,
+        "channel_names": CHANNEL_NAMES,
+        "window_size": WINDOW_SIZE,
+        "window_stride": WINDOW_STRIDE,
+        "sample_rate_hz": SAMPLE_RATE_HZ,
+        "class_names": class_names,
+        "checkpoint_epoch": int(checkpoint["epoch"]),
+        "checkpoint_validation_loss": float(checkpoint["val_loss"]),
+        "checkpoint_validation_accuracy": float(checkpoint["val_acc"]),
+    }
+    with open(META_PATH, "w") as f:
+        json.dump(metadata, f, indent=2)
+    print(f"Wrote model metadata sidecar to {META_PATH}")
 
 
 if __name__ == "__main__":

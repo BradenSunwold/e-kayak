@@ -10,6 +10,7 @@ from datetime import datetime
 from RfManager import RfManager
 from MotorManager import MotorManager
 from ImuManager import ImuManager
+from MlManager import MlManager
 from InfluxWriter import InfluxWriter
 
 def main():
@@ -35,15 +36,20 @@ def main():
     loggerImu = logging.getLogger('loggerImu')
     loggerImu.setLevel(LOG_LEVEL_MAP[config['imuManager']['imuLoggerVerbosityLevel']])
     loggerImu.propagate = False
+    loggerMl = logging.getLogger('loggerMl')
+    loggerMl.setLevel(LOG_LEVEL_MAP[config['mlManager']['mlLoggerVerbosityLevel']])
+    loggerMl.propagate = False
 
     # Build timestamped log file paths
     timestamp = datetime.now().strftime('%Y-%m-%d_%H:%M.%S')
     rfLogDir = os.path.dirname(config['rfManager']['rfLoggerFilePath'])
     motorLogDir = os.path.dirname(config['motorManager']['motorLoggerFilePath'])
     imuLogDir = os.path.dirname(config['imuManager']['imuLoggerFilePath'])
+    mlLogDir = os.path.dirname(config['mlManager']['mlLoggerFilePath'])
     rfLogPath = os.path.join(rfLogDir, f'rfLog_{timestamp}.log')
     motorLogPath = os.path.join(motorLogDir, f'motorLog_{timestamp}.log')
     imuLogPath = os.path.join(imuLogDir, f'imuLog_{timestamp}.log')
+    mlLogPath = os.path.join(mlLogDir, f'mlLog_{timestamp}.log')
 
     # Create logging handlers using QueueHandler/QueueListener so file I/O
     # happens in background threads and never blocks the RF or Motor schedulers.
@@ -73,10 +79,19 @@ def main():
     imuLogListener = logging.handlers.QueueListener(imuLogQueue, imuFileHandler, respect_handler_level=True)
     loggerImu.addHandler(imuQueueHandler)
 
+    mlFileHandler = logging.FileHandler(mlLogPath)
+    mlFileHandler.setLevel(logging.DEBUG)
+    mlFileHandler.setFormatter(logFormatter)
+    mlLogQueue = queue.Queue()
+    mlQueueHandler = logging.handlers.QueueHandler(mlLogQueue)
+    mlLogListener = logging.handlers.QueueListener(mlLogQueue, mlFileHandler, respect_handler_level=True)
+    loggerMl.addHandler(mlQueueHandler)
+
     # Start log listeners before manager threads
     rfLogListener.start()
     motorLogListener.start()
     imuLogListener.start()
+    mlLogListener.start()
 
     # Initialize InfluxDB writer
     influxConfigPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "influxdb_setup.json")
@@ -88,12 +103,18 @@ def main():
     oarImuToMotorQueue = queue.Queue()
     imuToMotorQueue = queue.Queue()
     imuRawToMlQueue = queue.Queue()
+    oarRawToMlQueue = queue.Queue()
+    mlToMotorQueue = queue.Queue()  # Reserved for future stroke events to the motor
 
     # Create manager objects
-    rfManager = RfManager(config['rfManager'], loggerRf, motorToRfQueue, rfToMotorQueue, oarImuToMotorQueue, influxWriter)
+    rfManager = RfManager(config['rfManager'], loggerRf, motorToRfQueue, rfToMotorQueue,
+                          oarImuToMotorQueue, oarRawToMlQueue=oarRawToMlQueue,
+                          influxWriter=influxWriter)
     imuManager = ImuManager(config['imuManager'], loggerImu, imuToMotorQueue, rawQueue=imuRawToMlQueue, influxWriter=influxWriter)
     motorManager = MotorManager(config['motorManager'], loggerMotor, rfToMotorQueue, motorToRfQueue,
                                 imuQueue=imuToMotorQueue, oarImuQueue=oarImuToMotorQueue, influxWriter=influxWriter)
+    mlManager = MlManager(config['mlManager'], loggerMl, oarRawToMlQueue,
+                          strokeOutQueue=mlToMotorQueue, influxWriter=influxWriter)
 
     def shutdownHandler(signum, frame):
         """Handle SIGINT/SIGTERM for graceful shutdown."""
@@ -102,10 +123,12 @@ def main():
         motorManager.shutdown()
         rfManager.shutdown()
         imuManager.shutdown()
+        mlManager.shutdown()
         influxWriter.close()
         rfLogListener.stop()
         motorLogListener.stop()
         imuLogListener.stop()
+        mlLogListener.stop()
 
     signal.signal(signal.SIGINT, shutdownHandler)
     signal.signal(signal.SIGTERM, shutdownHandler)
@@ -114,13 +137,16 @@ def main():
     rfManager.daemon = True
     motorManager.daemon = True
     imuManager.daemon = True
+    mlManager.daemon = True
     rfManager.start()
     motorManager.start()
     imuManager.start()
+    mlManager.start()
 
     rfManager.join()
     motorManager.join()
     imuManager.join()
+    mlManager.join()
 
 
 if __name__ == '__main__':

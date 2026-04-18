@@ -155,6 +155,10 @@ class MlManager(threading.Thread):
                 predictedName, strokeProbability, latencyMilliseconds)
 
         if self.mInfluxWriter:
+            # Note: no predicted_class tag. Tagging by the predicted class would
+            # split every field into two separate series (one per tag value),
+            # breaking the Grafana plots. predicted_class_index as a field
+            # already carries the same information.
             fields = {
                 'stroke_probability': strokeProbability,
                 'predicted_class_index': predictedIndex,
@@ -162,9 +166,7 @@ class MlManager(threading.Thread):
             }
             for name, prob in zip(self.mClassNames, probabilities):
                 fields[f'probability_{name}'] = float(prob)
-            self.mInfluxWriter.write_point(
-                'stroke_detector', fields,
-                tags={'predicted_class': predictedName})
+            self.mInfluxWriter.write_point('stroke_detector', fields)
 
     def run(self):
         self.mLogger.info('ML Manager thread running')

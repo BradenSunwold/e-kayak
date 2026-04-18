@@ -7,3 +7,4 @@ pythonPi/share/
 __pycache__/
 mlTraining/.venv/
 mlTraining/data/
+mlTraining/.DS_Store

@@ -2,11 +2,11 @@
 boatManager:
   # CPU cores the main process (RF + Motor + IMU threads) is allowed to run on.
   # Pi 5 has 4 cores (0–3). ML gets the other pair via mlManager.cpuAffinity.
-  cpuAffinity: [0, 1]
+  cpuAffinity: [0, 1, 2]
 rfManager:
   rfReadDataRateInMilliseconds: 10
   rfWriteDataRateInMilliseconds: 100
-  rfLoggerVerbosityLevel: INFO
+  rfLoggerVerbosityLevel: DEBUG
   rfLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/rfLog.txt
 motorManager:
   motorCommandReadRateInMilliseconds: 50
@@ -134,6 +134,6 @@ mlManager:
   inferenceLogIntervalSamples: 5
   # CPU cores the ML process is pinned to. Keeps inference off the cores
   # the main process (RF/Motor/IMU) is scheduling work on.
-  cpuAffinity: [2, 3]
-  mlLoggerVerbosityLevel: INFO
+  cpuAffinity: [3]
+  mlLoggerVerbosityLevel: DEBUG
   mlLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/mlLog.txt

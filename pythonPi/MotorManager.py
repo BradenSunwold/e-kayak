@@ -51,7 +51,7 @@ FAULT_CONFIG_KEY = {
 
 class MotorManager(threading.Thread):
     def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue,
-                 imuQueue=None, oarImuQueue=None, influxWriter=None):
+                 imuQueue=None, oarImuQueue=None, mlQueue=None, influxWriter=None):
         super().__init__()
         self.mLogger = logger
         self.mInfluxWriter = influxWriter
@@ -64,6 +64,7 @@ class MotorManager(threading.Thread):
         self.mOutgoingQueue = outgoingQueue
         self.mImuQueue = imuQueue              # Kayak heading from ImuManager
         self.mOarImuQueue = oarImuQueue        # Oar pitch/roll/yaw from RfManager
+        self.mMlQueue = mlQueue                # Stroke probability from MlManager
 
         # Variables coming from RF manager
         self.mMotorSpeedManual = 0
@@ -71,7 +72,7 @@ class MotorManager(threading.Thread):
         self.mPreviousMode = MotorMode.TRAINING
 
         # Variables coming from ML model
-        self.mEstimatedSpeed = 0.0
+        self.mStrokeProbability = 0.0
 
         # Kayak IMU state
         self.mKayakHeading = 0.0
@@ -126,6 +127,16 @@ class MotorManager(threading.Thread):
         self.mMotorWriteInterval = self.mConfigurator['motorWriteRateInMilliseconds'] / 1000
         self.mRateLimiter = RCFilter.RCFilter(self.mRpmFilterTau, self.mMotorWriteInterval)
         self.mRateLimiter.Clear()
+
+        # Auto mode config and asymmetric RC filter
+        autoConfig = self.mConfigurator.get('autoMode', {})
+        self.mAutoDeadbandRpm = autoConfig.get('deadbandRpm', 100)
+        self.mAutoStrokeRpm = autoConfig.get('strokeRpm', 400)
+        self.mStrokeProbabilityThreshold = autoConfig.get('strokeProbabilityThreshold', 0.75)
+        self.mAutoRampUpTau = autoConfig.get('rampUpTauInSeconds', 0.5)
+        self.mAutoRampDownTau = autoConfig.get('rampDownTauInSeconds', 2.0)
+        self.mAutoRpmFilter = RCFilter.RCFilter(self.mAutoRampDownTau, self.mMotorWriteInterval)
+        self.mAutoRpmFilter.Clear()
 
         # Fin controller config
         self.mFinConfig = self.mConfigurator.get('finController', {})
@@ -346,7 +357,17 @@ class MotorManager(threading.Thread):
         else:
             self.mLogger.debug("Command queue empty")
 
-        # Read ML module - Empty for now
+        # Read stroke probability from ML module
+        if self.mMlQueue is not None:
+            latestMl = None
+            while True:
+                try:
+                    latestMl = self.mMlQueue.get_nowait()
+                except queue.Empty:
+                    break
+            if latestMl is not None:
+                (self.mStrokeProbability,) = struct.unpack('f', latestMl)
+                self.mLogger.debug('Stroke probability: %.3f', self.mStrokeProbability)
 
         self.mNextCommandReadTime += self.mCommandReadInterval
         self.mScheduler.enterabs(self.mNextCommandReadTime, 1, self.ReadCommands)
@@ -369,11 +390,24 @@ class MotorManager(threading.Thread):
         elif self.mMode == MotorMode.TRAINING:
             self.mRpm = 0.0
             self.mLogger.debug('In Mode TRAINING')
-        else:
-            # Auto mode — use estimated speed based on ML model
-            # self.mRpm = self.mEstimatedSpeed
-            self.mMode = MotorMode.MANUAL  # For now, force manual mode
-            self.mLogger.debug('Force Mode MANUAL')
+        elif self.mMode == MotorMode.AUTO:
+            # Auto mode — on entry, clear filter so RPM ramps up from 0
+            if self.mPreviousMode != MotorMode.AUTO:
+                self.mAutoRpmFilter.Clear()
+                self.mLogger.info('Entered AUTO mode')
+
+            # Determine target RPM based on stroke detection
+            strokeDetected = self.mStrokeProbability >= self.mStrokeProbabilityThreshold
+            if strokeDetected:
+                autoTargetRpm = self.mAutoStrokeRpm
+                self.mAutoRpmFilter.SetTau(self.mAutoRampUpTau, self.mMotorWriteInterval)
+            else:
+                autoTargetRpm = self.mAutoDeadbandRpm
+                self.mAutoRpmFilter.SetTau(self.mAutoRampDownTau, self.mMotorWriteInterval)
+
+            self.mRpm = self.mAutoRpmFilter.Feed(autoTargetRpm)
+            self.mLogger.debug('AUTO stroke=%.3f target=%d filtered_rpm=%.1f',
+                               self.mStrokeProbability, autoTargetRpm, self.mRpm)
 
         # If we are in a startup, ignore all faults and commands - Force a reversal for X seconds
         if(self.mStartupLatched == True) :
@@ -384,8 +418,14 @@ class MotorManager(threading.Thread):
                 self.mLogger.info('Exiting Startup Reversal')
 
         # Send RPM command to the motor
+        # In auto mode, mRpm is already filtered by the asymmetric auto RC filter
+        # so skip the manual rate limiter to avoid double-filtering
         self.mLogger.debug('Rpm Step Command: %s', self.mRpm)
-        filteredRpm = self.mRateLimiter.Feed(self.mRpm)
+        if self.mMode == MotorMode.AUTO:
+            filteredRpm = self.mRpm
+            self.mRateLimiter.mOutput = self.mRpm  # Keep manual filter synced for mode transitions
+        else:
+            filteredRpm = self.mRateLimiter.Feed(self.mRpm)
         self.mLogger.debug('Filtered RPM: %s', filteredRpm)
 
         if self.mInfluxWriter:
@@ -603,12 +643,12 @@ class MotorManager(threading.Thread):
 
         self._UpdateHeadingSetpoint()
 
-        if self.mMode == MotorMode.TRAINING:
-            # Training mode — force fin to center, skip PID
+        if self.mMode == MotorMode.TRAINING or self.mMode == MotorMode.AUTO:
+            # Training / Auto mode — force fin to center, skip PID
             self._SetFinAngle(0.0)
             self.mFinAngleFilter.Clear()
             self.mHeadingPid.Reset()
-            self.mLogger.debug('FinCtrl TRAINING  fin=0.00')
+            self.mLogger.debug('FinCtrl %s  fin=0.00', self.mMode.name)
         else:
             self._FinController()
 

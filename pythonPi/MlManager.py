@@ -189,6 +189,10 @@ class MlManager(multiprocessing.Process):
                 'Prediction: %s (stroke_probability=%.3f) inference_latency=%.2fms',
                 predictedName, strokeProbability, latencyMilliseconds)
 
+        # Send stroke probability to motor manager for auto-mode RPM control
+        if self.mStrokeOutQueue is not None:
+            self.mStrokeOutQueue.put(struct.pack('f', strokeProbability))
+
         if self.mInfluxWriter:
             # Note: no predicted_class tag. Tagging by the predicted class would
             # split every field into two separate series (one per tag value),

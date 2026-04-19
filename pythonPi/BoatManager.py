@@ -131,7 +131,8 @@ def main():
                           influxWriter=influxWriter)
     imuManager = ImuManager(config['imuManager'], loggerImu, imuToMotorQueue, rawQueue=imuRawToMlQueue, influxWriter=influxWriter)
     motorManager = MotorManager(config['motorManager'], loggerMotor, rfToMotorQueue, motorToRfQueue,
-                                imuQueue=imuToMotorQueue, oarImuQueue=oarImuToMotorQueue, influxWriter=influxWriter)
+                                imuQueue=imuToMotorQueue, oarImuQueue=oarImuToMotorQueue,
+                                mlQueue=mlToMotorQueue, influxWriter=influxWriter)
     # MlManager runs in its own process. No logger object is passed — the child
     # builds its own FileHandler-backed logger from the log path + level.
     mlManager = MlManager(

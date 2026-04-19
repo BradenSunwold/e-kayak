@@ -1,51 +1,96 @@
 import json
+import os
 import time
 import struct
-import threading
 import queue
+import logging
+import multiprocessing
 from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
 
+from InfluxWriter import InfluxWriter
 
-class MlManager(threading.Thread):
-    """Runs the stroke-detector ONNX model on incoming oar IMU samples.
 
-    Maintains a rolling buffer of the last N samples (N = model window size).
-    On every new sample the buffer shifts left, the new sample is appended,
-    and inference runs once the buffer is fully populated. Predictions are
-    logged and published to InfluxDB so they can be watched live in Grafana.
+class MlManager(multiprocessing.Process):
+    """Runs the stroke-detector ONNX model in its own OS process.
+
+    Why a Process instead of a Thread: CPython's Global Interpreter Lock
+    (the "GIL") serializes Python bytecode across threads in a single
+    interpreter. ONNX and numpy release the GIL around their native kernels,
+    but a busy main thread (RF + motor scheduling) can still cause multi-ms
+    stalls on inference latency. Moving ML into its own process gives it an
+    independent interpreter and lets us pin it to a dedicated pair of CPU
+    cores, leaving the other cores for RF/motor/IMU work.
+
+    Lifecycle:
+      - __init__ runs in the parent. Only stores picklable config/paths so
+        the parent isn't holding ML resources when the child spawns.
+      - run() runs in the child. Sets CPU affinity, creates the logger,
+        InfluxWriter, and ONNX InferenceSession, then enters the sample loop.
 
     Inputs arrive from RfManager as 6-float packets in the training CSV order:
     accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z.
-
-    For now the predicted class / stroke probability is only logged — the motor
-    does not yet react. The strokeOutQueue placeholder is wired for the future
-    MotorManager integration.
     """
 
-    def __init__(self, configDictionary, logger,
-                 oarRawQueue, strokeOutQueue=None, influxWriter=None):
+    def __init__(self, configDictionary, oarRawQueue, shutdownEvent,
+                 logFilePath, logLevel, influxConfigPath, influxSession,
+                 strokeOutQueue=None):
         super().__init__()
-        self.mLogger = logger
-        self.mInfluxWriter = influxWriter
-        self.mLogger.info('**** ML Manager Starting Up *****')
-        self.mLogger.info('*************************************')
-
-        self.mIncomingQueue = oarRawQueue
-        self.mStrokeOutQueue = strokeOutQueue   # reserved for future motor integration
-        self.mShutdownRequested = False
         self.mConfigurator = configDictionary
+        self.mIncomingQueue = oarRawQueue
+        self.mShutdownEvent = shutdownEvent
+        self.mStrokeOutQueue = strokeOutQueue  # reserved for future motor integration
+        self.mLogFilePath = logFilePath
+        self.mLogLevel = logLevel
+        self.mInfluxConfigPath = influxConfigPath
+        self.mInfluxSession = influxSession
 
-        # Resolve artifact paths relative to this file so the Pi can reference the
-        # mlTraining/checkpoints directory without hard-coding the user's home path.
+        # Queue read timeout — short enough that shutdown is responsive
+        self.mQueueReadTimeoutSeconds = 0.2
+
+    def _setupLogger(self):
+        """Build a child-process logger that writes directly to its own file.
+
+        The parent uses QueueHandler/QueueListener for its threads so file I/O
+        doesn't block scheduling, but that pattern is in-process only — the
+        listener thread lives in the parent and the child can't reach it.
+        A plain FileHandler in the child is simpler and keeps ML logs
+        self-contained.
+        """
+        logger = logging.getLogger('loggerMl')
+        logger.setLevel(self.mLogLevel)
+        logger.propagate = False
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        fileHandler = logging.FileHandler(self.mLogFilePath)
+        fileHandler.setLevel(logging.DEBUG)
+        fileHandler.setFormatter(formatter)
+        logger.addHandler(fileHandler)
+        return logger
+
+    def _applyCpuAffinity(self):
+        """Pin this process to a subset of cores so the OS scheduler can't
+        bounce inference onto CPUs saturated by RF/motor work in the main
+        process."""
+        affinity = self.mConfigurator.get('cpuAffinity')
+        if not affinity:
+            return
+        try:
+            os.sched_setaffinity(0, set(affinity))
+            self.mLogger.info('CPU affinity set to cores %s', sorted(affinity))
+        except (AttributeError, OSError) as e:
+            # sched_setaffinity is Linux-only; silently skip elsewhere.
+            self.mLogger.warning('Could not set CPU affinity: %s', e)
+
+    def _loadArtifacts(self):
+        """Resolve paths, load metadata + norm stats + ONNX model."""
         baseDir = Path(__file__).parent
         modelPath = (baseDir / self.mConfigurator['modelPath']).resolve()
         metaPath = (baseDir / self.mConfigurator['modelMetaPath']).resolve()
         normStatsPath = (baseDir / self.mConfigurator['normStatsPath']).resolve()
 
-        # Model metadata sidecar describes the model's input shape and class labels
+        # Metadata sidecar describes the model's input shape and class labels
         # so the Pi never duplicates training-side constants.
         with open(metaPath) as f:
             self.mMeta = json.load(f)
@@ -72,31 +117,21 @@ class MlManager(threading.Thread):
         self.mChannelStandardDeviations = np.array(stats['stds'], dtype=np.float32)
         self.mLogger.info('Loaded normalization statistics from %s', normStatsPath.name)
 
-        # Load ONNX model into an onnxruntime inference session
+        # onnxruntime threading knobs. With a small CNN and a 2-core pool,
+        # intra_op=1 is faster than letting onnxruntime spin up a thread pool:
+        # the synchronization overhead outweighs any parallel-kernel win, and
+        # a single inference thread keeps latency variance low.
+        sessionOptions = ort.SessionOptions()
+        sessionOptions.intra_op_num_threads = 1
+        sessionOptions.inter_op_num_threads = 1
         self.mSession = ort.InferenceSession(
             modelPath.as_posix(),
+            sess_options=sessionOptions,
             providers=['CPUExecutionProvider'],
         )
         self.mLogger.info('Loaded ONNX model from %s', modelPath.name)
 
-        # Rolling buffer shaped (num_channels, window_size). Newest sample lives at [:, -1].
-        # Seeded to zeros; we report "warming up" until it has been fully filled.
-        self.mBuffer = np.zeros((self.mNumChannels, self.mWindowSize), dtype=np.float32)
-        self.mBufferFillCount = 0
-
-        # Inference rate is tied to incoming sample rate (~20 Hz). To keep the log
-        # from getting spammy, only emit INFO predictions every N samples; DEBUG still fires every time.
-        self.mInferenceCounter = 0
-        self.mInferenceLogInterval = self.mConfigurator.get('inferenceLogIntervalSamples', 5)
-
-        # Queue read timeout — short enough that shutdown is responsive
-        self.mQueueReadTimeoutSeconds = 0.2
-
-    def shutdown(self):
-        self.mLogger.info('ML shutdown requested')
-        self.mShutdownRequested = True
-
-    def _IngestSample(self, payload):
+    def _ingestSample(self, payload):
         """Unpack one 6-float sample, push into the rolling buffer, run inference."""
         ax, ay, az, gx, gy, gz = struct.unpack('ffffff', payload)
         sample = np.array([ax, ay, az, gx, gy, gz], dtype=np.float32)
@@ -169,14 +204,39 @@ class MlManager(threading.Thread):
             self.mInfluxWriter.write_point('stroke_detector', fields)
 
     def run(self):
-        self.mLogger.info('ML Manager thread running')
-        while not self.mShutdownRequested:
+        """Child-process entry point. Builds logger/writer/session, then loops."""
+        self.mLogger = self._setupLogger()
+        self.mLogger.info('**** ML Manager process starting up, pid=%d ****', os.getpid())
+
+        self._applyCpuAffinity()
+        self._loadArtifacts()
+
+        # InfluxWriter owns a background thread for batching. Constructing it
+        # here (in the child) keeps that thread in this process, not forked
+        # from the parent's write_api.
+        self.mInfluxWriter = InfluxWriter(self.mInfluxConfigPath, session=self.mInfluxSession)
+
+        # Rolling buffer shaped (num_channels, window_size). Newest sample at [:, -1].
+        # Seeded to zeros; we report "warming up" until it has been fully filled.
+        self.mBuffer = np.zeros((self.mNumChannels, self.mWindowSize), dtype=np.float32)
+        self.mBufferFillCount = 0
+
+        # Inference rate is tied to incoming sample rate (~20 Hz). To keep the
+        # log from getting spammy, only emit INFO predictions every N samples;
+        # DEBUG still fires every time.
+        self.mInferenceCounter = 0
+        self.mInferenceLogInterval = self.mConfigurator.get('inferenceLogIntervalSamples', 5)
+
+        self.mLogger.info('ML Manager process running')
+        while not self.mShutdownEvent.is_set():
             try:
                 payload = self.mIncomingQueue.get(timeout=self.mQueueReadTimeoutSeconds)
             except queue.Empty:
                 continue
             try:
-                self._IngestSample(payload)
+                self._ingestSample(payload)
             except Exception as e:
                 self.mLogger.error('Exception in ML inference: %s', e, exc_info=True)
-        self.mLogger.info('ML Manager thread exiting')
+
+        self.mInfluxWriter.close()
+        self.mLogger.info('ML Manager process exiting')

@@ -1,4 +1,8 @@
 ---
+boatManager:
+  # CPU cores the main process (RF + Motor + IMU threads) is allowed to run on.
+  # Pi 5 has 4 cores (0–3). ML gets the other pair via mlManager.cpuAffinity.
+  cpuAffinity: [0, 1]
 rfManager:
   rfReadDataRateInMilliseconds: 10
   rfWriteDataRateInMilliseconds: 100
@@ -128,5 +132,8 @@ mlManager:
   normStatsPath: ../mlTraining/checkpoints/norm_stats.json
   # Emit an INFO prediction line every N samples (DEBUG level still fires every sample)
   inferenceLogIntervalSamples: 5
+  # CPU cores the ML process is pinned to. Keeps inference off the cores
+  # the main process (RF/Motor/IMU) is scheduling work on.
+  cpuAffinity: [2, 3]
   mlLoggerVerbosityLevel: INFO
   mlLoggerFilePath: /home/bradensunwold/Documents/e-kayak/pythonPi/logs/mlLog.txt

@@ -15,7 +15,7 @@ class InfluxWriter:
         writer.close()
     """
 
-    def __init__(self, config):
+    def __init__(self, config, session=None):
         """Initialize from config dict or path to JSON config file.
 
         Config keys:
@@ -23,6 +23,10 @@ class InfluxWriter:
             batchSize (int, default 10)   — points buffered before flush
             flushIntervalMs (int, default 50)  — max ms between flushes
             enabled (bool, default True)  — set False to disable writes
+
+        session: optional pre-generated session string. Pass this when multiple
+            InfluxWriter instances (e.g. one per process) need to share the
+            same session tag so a single Grafana filter covers all of them.
         """
         if isinstance(config, str):
             with open(config, "r") as f:
@@ -52,7 +56,7 @@ class InfluxWriter:
         )
 
         # Session tag lets you filter Grafana dashboards to a specific run
-        self._session = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
+        self._session = session if session else datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
 
         logger.info(
             "InfluxDB writer ready (bucket=%s, batch=%d, flush=%dms, session=%s)",

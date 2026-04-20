@@ -26,6 +26,7 @@ from config import (
     BATCH_SIZE,
     CHECKPOINT_DIR,
     EPOCHS,
+    LABEL_MAP,
     LEARNING_RATE,
     RANDOM_SEED,
     VAL_SPLIT,
@@ -38,17 +39,33 @@ from utils import get_device, save_norm_stats, seed_everything
 
 def split_files(file_list, val_split=VAL_SPLIT):
     """
-    Split file list into train and val sets.
+    Split file list into train and val sets, stratified by class.
 
-    We split by FILE, not by window. If we split by window, adjacent windows
-    from the same file would end up in both train and val (because of the 75%
-    overlap), and the model would essentially memorize the validation set.
+    Stratification = each class is represented in both splits proportionally.
+    With only a handful of files per class, an unstratified random split can
+    silently put every file of a class on one side -- which breaks validation
+    (you can't measure accuracy on a class with zero samples in val).
+
+    We also split by FILE, not by window. If we split by window, adjacent
+    windows from the same file would end up in both train and val (because
+    of the 75% overlap), and the model would essentially memorize the
+    validation set.
     """
     random.seed(RANDOM_SEED)
-    shuffled = file_list.copy()
-    random.shuffle(shuffled)
-    n_val = max(1, int(len(shuffled) * val_split))
-    return shuffled[n_val:], shuffled[:n_val]
+
+    by_label = {}
+    for path, label in file_list:
+        by_label.setdefault(label, []).append((path, label))
+
+    train_files, val_files = [], []
+    for label, files in by_label.items():
+        shuffled = files.copy()
+        random.shuffle(shuffled)
+        n_val = max(1, int(len(shuffled) * val_split))
+        val_files.extend(shuffled[:n_val])
+        train_files.extend(shuffled[n_val:])
+
+    return train_files, val_files
 
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
@@ -82,11 +99,18 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
 
 
 def validate(model, loader, criterion, device):
-    """Run validation. Returns average loss and accuracy."""
+    """
+    Run validation. Returns (avg_loss, overall_accuracy, per_class_accuracy).
+
+    per_class_accuracy is a dict mapping class_int -> accuracy for that class.
+    A class missing from the dict means it had zero samples in the val set.
+    """
     model.eval()  # disable dropout, batchnorm uses running stats
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
+    class_correct = {}  # class_int -> count of correct predictions
+    class_total = {}    # class_int -> total count of samples
 
     with torch.no_grad():  # no gradient computation needed for validation
         for windows, labels in loader:
@@ -96,13 +120,26 @@ def validate(model, loader, criterion, device):
             predictions = model(windows)
             loss = criterion(predictions, labels)
 
+            predicted_labels = predictions.argmax(dim=1)
             total_loss += loss.item() * labels.size(0)
-            total_correct += (predictions.argmax(dim=1) == labels).sum().item()
+            total_correct += (predicted_labels == labels).sum().item()
             total_samples += labels.size(0)
+
+            # Tally correct/total per class for this batch
+            for label_tensor in torch.unique(labels):
+                label = label_tensor.item()
+                mask = labels == label_tensor
+                class_correct[label] = class_correct.get(label, 0) + \
+                    (predicted_labels[mask] == label_tensor).sum().item()
+                class_total[label] = class_total.get(label, 0) + mask.sum().item()
 
     avg_loss = total_loss / total_samples
     accuracy = total_correct / total_samples
-    return avg_loss, accuracy
+    per_class_acc = {
+        label: class_correct[label] / class_total[label]
+        for label in class_total
+    }
+    return avg_loss, accuracy, per_class_acc
 
 
 def main():
@@ -114,15 +151,15 @@ def main():
     all_files = discover_csv_files()
     if len(all_files) < 2:
         print(f"Found {len(all_files)} CSV file(s) in data/. Need at least 2 "
-              "(one for train, one for val). Collect more data!")
+              "(one for train, one for validation). Collect more data!")
         return
 
     train_files, val_files = split_files(all_files)
-    print(f"Train files: {len(train_files)}, Val files: {len(val_files)}")
+    print(f"Train files: {len(train_files)}, Validation files: {len(val_files)}")
     for path, label in train_files:
-        print(f"  TRAIN: {path.name} (label={label})")
+        print(f"  TRAIN:      {path.name} (label={label})")
     for path, label in val_files:
-        print(f"  VAL:   {path.name} (label={label})")
+        print(f"  VALIDATION: {path.name} (label={label})")
 
     # Compute normalization stats from training data only
     means, stds = compute_norm_stats(train_files)
@@ -132,7 +169,7 @@ def main():
     # Create datasets and loaders
     train_dataset = StrokeDataset(train_files, means, stds)
     val_dataset = StrokeDataset(val_files, means, stds)
-    print(f"Train windows: {len(train_dataset)}, Val windows: {len(val_dataset)}")
+    print(f"Train windows: {len(train_dataset)}, Validation windows: {len(val_dataset)}")
 
     train_loader = DataLoader(
         train_dataset,
@@ -168,15 +205,27 @@ def main():
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     checkpoint_path = CHECKPOINT_DIR / "best_model.pt"
 
+    # Class labels sorted by int, e.g. [(0, "no_stroke"), (1, "stroke")].
+    # Used to build per-class accuracy columns in a stable order.
+    class_labels = sorted(
+        ((lbl_int, lbl_name) for lbl_name, lbl_int in LABEL_MAP.items())
+    )
+    per_class_header = " ".join(
+        f"{name + ' Accuracy':>18}" for _, name in class_labels
+    )
+
     print(f"\nTraining for {EPOCHS} epochs...")
-    print(f"{'Epoch':>5} | {'Train Loss':>10} {'Train Acc':>10} | "
-          f"{'Val Loss':>10} {'Val Acc':>10} | {'Best':>4}")
+    print(f"{'Epoch':>5} | {'Train Loss':>10} {'Train Accuracy':>15} | "
+          f"{'Validation Loss':>15} {'Validation Accuracy':>19} | "
+          f"{per_class_header} | {'Best':>4}")
 
     for epoch in range(1, EPOCHS + 1):
         train_loss, train_acc = train_one_epoch(
             model, train_loader, criterion, optimizer, device
         )
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        val_loss, val_acc, per_class_acc = validate(
+            model, val_loader, criterion, device
+        )
 
         # Save checkpoint if this is the best validation loss so far
         is_best = val_loss < best_val_loss
@@ -189,12 +238,19 @@ def main():
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_loss": val_loss,
                 "val_acc": val_acc,
+                "per_class_acc": per_class_acc,
             }, checkpoint_path)
 
-        print(f"{epoch:5d} | {train_loss:10.4f} {train_acc:10.4f} | "
-              f"{val_loss:10.4f} {val_acc:10.4f} | {'*' if is_best else ''}")
+        per_class_values = " ".join(
+            f"{per_class_acc[lbl_int]:18.4f}"
+            if lbl_int in per_class_acc else f"{'N/A':>18}"
+            for lbl_int, _ in class_labels
+        )
+        print(f"{epoch:5d} | {train_loss:10.4f} {train_acc:15.4f} | "
+              f"{val_loss:15.4f} {val_acc:19.4f} | "
+              f"{per_class_values} | {'*' if is_best else ''}")
 
-    print(f"\nDone! Best val loss: {best_val_loss:.4f} at epoch {best_epoch}")
+    print(f"\nDone! Best validation loss: {best_val_loss:.4f} at epoch {best_epoch}")
     print(f"Checkpoint saved to: {checkpoint_path}")
 
 

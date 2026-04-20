@@ -17,7 +17,7 @@
     "no_stroke",
     "stroke"
   ],
-  "checkpoint_epoch": 3,
-  "checkpoint_validation_loss": 0.16398892463916095,
-  "checkpoint_validation_accuracy": 0.9504132231404959
+  "checkpoint_epoch": 12,
+  "checkpoint_validation_loss": 0.09207630157470033,
+  "checkpoint_validation_accuracy": 0.9662921348314607
 }

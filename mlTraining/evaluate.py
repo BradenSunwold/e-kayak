@@ -21,24 +21,14 @@ What the metrics mean:
         e.g. row "stroke", column "no_stroke" = strokes the model missed
 """
 
-import random
-
 import numpy as np
 import torch
 
-from config import CHECKPOINT_DIR, LABEL_MAP, RANDOM_SEED, VAL_SPLIT
-from dataset import StrokeDataset, compute_norm_stats, discover_csv_files
+from config import CHECKPOINT_DIR, LABEL_MAP
+from dataset import StrokeDataset, discover_csv_files
 from model import StrokeCNN
+from train import split_files  # reuse the exact split used during training
 from utils import get_device, load_norm_stats, seed_everything
-
-
-def split_files(file_list, val_split=VAL_SPLIT):
-    """Same split logic as train.py -- same seed guarantees same split."""
-    random.seed(RANDOM_SEED)
-    shuffled = file_list.copy()
-    random.shuffle(shuffled)
-    n_val = max(1, int(len(shuffled) * val_split))
-    return shuffled[n_val:], shuffled[:n_val]
 
 
 def main():
@@ -63,7 +53,7 @@ def main():
     model.eval()
 
     print(f"Loaded checkpoint from epoch {checkpoint['epoch']} "
-          f"(val_loss={checkpoint['val_loss']:.4f})")
+          f"(validation_loss={checkpoint['val_loss']:.4f})")
 
     # Run predictions on all val windows
     all_preds = []

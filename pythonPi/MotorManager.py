@@ -515,7 +515,7 @@ class MotorManager(threading.Thread):
         """
         clamped = max(-self.mMaxFinAngle, min(self.mMaxFinAngle, angleDeg))
         self.mFinAngle = clamped
-        servoAngle = self.mServoNeutralAngle + clamped
+        servoAngle = self.mServoNeutralAngle - clamped
         self.mFinServo.angle = servoAngle
 
     def _ReadKayakImu(self):
@@ -589,7 +589,7 @@ class MotorManager(threading.Thread):
                     effectivePitch = self.mOarPitch + self.mPitchDeadbandDeg
                 self.mFinAngle = max(-self.mMaxFinAngle,
                                      min(self.mMaxFinAngle,
-                                         -effectivePitch * self.mOpenLoopGain))
+                                         effectivePitch * self.mOpenLoopGain))
                 self.mLogger.debug('Setpoint STEERING  oar_pitch=%.2f  fin_angle=%.2f',
                                    self.mOarPitch, self.mFinAngle)
             else:

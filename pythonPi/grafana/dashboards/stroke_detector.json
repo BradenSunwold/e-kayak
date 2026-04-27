@@ -171,13 +171,81 @@
       ]
     },
     {
+      "title": "Motor RPM",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "rpm",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "pointSize": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "commanded_rpm"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    5
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-ekayak"
+          },
+          "query": "from(bucket: \"telemetry\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"motor_cmd\")\n  |> filter(fn: (r) => r._field == \"commanded_rpm\" or r._field == \"filtered_rpm\")\n  |> filter(fn: (r) => if \"${session}\" == \"$__all\" then true else r.session == \"${session}\")",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-ekayak"
+          },
+          "query": "from(bucket: \"telemetry\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"motor\" and r._field == \"rpm\")\n  |> filter(fn: (r) => if \"${session}\" == \"$__all\" then true else r.session == \"${session}\")",
+          "refId": "B"
+        }
+      ]
+    },
+    {
       "title": "Paddle Acceleration (X / Y / Z)",
       "type": "timeseries",
       "gridPos": {
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 31
       },
       "fieldConfig": {
         "defaults": {

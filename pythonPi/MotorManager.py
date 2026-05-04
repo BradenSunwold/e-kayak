@@ -513,6 +513,7 @@ class MotorManager(threading.Thread):
 
         Clamps to ±mMaxFinAngle, converts to servo angle (90° = neutral), and writes to servo.
         """
+        angleDeg = -1 * angleDeg
         clamped = max(-self.mMaxFinAngle, min(self.mMaxFinAngle, angleDeg))
         self.mFinAngle = clamped
         servoAngle = self.mServoNeutralAngle - clamped

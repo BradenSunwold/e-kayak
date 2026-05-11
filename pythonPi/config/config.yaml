@@ -21,7 +21,7 @@ motorManager:
   #   - SpeedThree: 90.0
   vescEnableGpioPin: 18
   motorPolePairs: 6
-  maxRpms: 2145 # 2145 corresponds to about 65% duty cycle and 12A current draw  # 500 for testing
+  maxRpms: 500 # 2145 corresponds to about 65% duty cycle and 12A current draw - 500 for testing
   speedSettingToRpmMapInPercent: # Number of elements here has to match numberOfSpeedSettings
     - 0.0
     - 60.0
@@ -86,8 +86,7 @@ motorManager:
 
   faultClearTimeoutInMilliseconds: 2000   # How long does fault have to be cleared to unlatch
   vescComsLossTimeoutInMilliseconds: 2000  # Fault if no VESC response for this long
-  oarComsLossTimeoutInMilliseconds: 2000   # Fault if no oar command rered5
-  ceived for this long
+  oarComsLossTimeoutInMilliseconds: 2000   # Fault if no oar command received for this long
   maxRpmReduction: 250                     # Max total RPM reduction from over-current recoveries before latching
   faultConfig:
     overTemp:
@@ -104,8 +103,8 @@ motorManager:
       latching: true
   rpmFilterTauInSeconds: 1.3       # RC filter time constant for RPM rate limiter (replaces FIR taps)
   autoMode:
-    deadbandRpm: 750                 # RPM to hold when first entering auto (keeps motor spinning)
-    strokeRpm: 1700                  # Target RPM to ramp to on stroke detection
+    deadbandRpm: 300                # 750 RPM to hold when first entering auto (keeps motor spinning)
+    strokeRpm: 500                  # 1700  Target RPM to ramp to on stroke detection
     strokeProbabilityThreshold: 0.75 # Probability above this = stroke detected
     rampUpTauInSeconds: 0.4          # RC filter tau for ramping UP on stroke detect
     rampDownTauInSeconds: 0.4        # RC filter tau for ramping DOWN on no stroke

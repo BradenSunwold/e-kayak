@@ -48,6 +48,17 @@ class ImuManager(threading.Thread):
         i2c = ExtendedI2C(self.mI2cBus)
         self.mSensor = adafruit_bno055.BNO055_I2C(i2c)
 
+        # Mounting orientation: chip→kayak transform is Rz(-90)·Ry(0)·Rx(180) (intrinsic ZYX).
+        # Yields kayak X = -chip Y (forward), Y = -chip X (side), Z = -chip Z (up).
+        self.mSensor.axis_remap = (
+            adafruit_bno055.AXIS_REMAP_Y,
+            adafruit_bno055.AXIS_REMAP_X,
+            adafruit_bno055.AXIS_REMAP_Z,
+            adafruit_bno055.AXIS_REMAP_NEGATIVE,
+            adafruit_bno055.AXIS_REMAP_NEGATIVE,
+            adafruit_bno055.AXIS_REMAP_NEGATIVE,
+        )
+
         # Load saved calibration if available
         self._LoadCalibration()
 
@@ -75,7 +86,7 @@ class ImuManager(threading.Thread):
 
         try:
             euler = self.mSensor.euler
-            accel = self.mSensor.acceleration
+            accel = self.mSensor.linear_acceleration
             gyro = self.mSensor.gyro
             sys_cal, gyro_cal, accel_cal, mag_cal = self.mSensor.calibration_status
 
@@ -88,7 +99,7 @@ class ImuManager(threading.Thread):
                 payload = struct.pack('f', heading)
                 self.mOutgoingQueue.put(payload)
 
-                # Pack raw accel/gyro and send to ML thread
+                # Pack linear accel (gravity-removed) and gyro, send to ML thread
                 if self.mRawQueue is not None:
                     rawPayload = struct.pack('ffffff', ax, ay, az, gx, gy, gz)
                     self.mRawQueue.put(rawPayload)

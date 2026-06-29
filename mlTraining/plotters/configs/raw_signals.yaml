@@ -1,5 +1,14 @@
-session: "2026-05-04_09:32.46"
-log_dir: "/Users/bradensunwold/Documents/KayakLogs/5-4-26/logs"
+session: "2026-06-27_16:36.15"
+log_dir: "/Users/bradensunwold/Documents/KayakLogs/6-28-26_Salmon_Bay_Broken_Motor/logs"
+
+# Override any LabelConfig field here; the rest come from config.py defaults.
+# Only used when a panel below has source: labels. Omit the block entirely
+# to use all defaults.
+labels_config:
+  assist_delay_ms: 100
+  assist_window_ms: 600
+  turn_delay_ms: 200
+  turn_window_ms: 2000
 
 plots:
   - title: "Paddle Accel (oar IMU)"
@@ -21,6 +30,12 @@ plots:
     source: imu
     signals: [gyro_x, gyro_y, gyro_z]
     ylabel: "rad/s"
+
+  # Comment in to overlay the regression labels (future-window means of
+  # kayak signal). Requires the labels_config block above.
+  - title: "Computed Labels"
+    source: labels
+    signals: [assist_label, turn_label]
 
   # - title: "Kayak Heading"
   #   source: imu

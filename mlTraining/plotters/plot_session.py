@@ -11,9 +11,18 @@ Usage:
 Config schema (YAML):
     session: "2026-05-04_09:32.46"          # log filename suffix
     log_dir: "/abs/path/to/logs"
+
+    # Optional. Only needed if any panel uses source: labels.
+    # All fields are optional — defaults come from config.py.
+    labels_config:
+      assist_delay_ms: 100
+      assist_window_ms: 600
+      turn_delay_ms: 200
+      turn_window_ms: 2000
+
     plots:
       - title: "Paddle Accel"
-        source: rf                          # imu | rf | ml | motor
+        source: rf                          # imu | rf | ml | motor | labels
         signals: [accel_x, accel_y, accel_z]
         # optional: kind: line (default) | step | scatter
         # optional: ylabel: "m/s^2"
@@ -30,14 +39,18 @@ import pandas as pd
 import yaml
 
 from plotters import parsers
+from plotters.labels import LabelConfig, compute_labels
 
 
+# Log-file sources read from disk. 'labels' is a virtual source computed
+# from the kayak IMU DataFrame, not read from a separate log file.
 SOURCE_TO_PREFIX = {
     "imu": "imuLog",
     "rf": "rfLog",
     "ml": "mlLog",
     "motor": "motorLog",
 }
+COMPUTED_SOURCES = {"labels"}
 
 
 @dataclass
@@ -49,13 +62,14 @@ class PlotSpec:
     ylabel: str | None = None
 
 
-def _load_config(path: Path) -> tuple[str, Path, list[PlotSpec]]:
+def _load_config(path: Path) -> tuple[str, Path, list[PlotSpec], LabelConfig | None]:
     with open(path) as fh:
         cfg = yaml.safe_load(fh)
     session = cfg["session"]
     log_dir = Path(cfg["log_dir"]).expanduser()
     plots = [PlotSpec(**p) for p in cfg["plots"]]
-    return session, log_dir, plots
+    labels_cfg = LabelConfig(**cfg["labels_config"]) if cfg.get("labels_config") else None
+    return session, log_dir, plots, labels_cfg
 
 
 def _log_path(log_dir: Path, source: str, session: str) -> Path:
@@ -145,12 +159,18 @@ def main() -> None:
                     help="End of time window. HH:MM:SS or seconds-from-start.")
     args = ap.parse_args()
 
-    session, log_dir, specs = _load_config(args.config)
+    session, log_dir, specs, labels_cfg = _load_config(args.config)
 
-    # Parse every required source once and cache
-    needed_sources = sorted({s.source for s in specs})
+    # Parse every required source once and cache. Computed sources (labels)
+    # are derived after the raw log sources are loaded, and may require
+    # auto-loading their dependencies (e.g. labels needs imu).
+    requested_sources = {s.source for s in specs}
+    log_sources = requested_sources - COMPUTED_SOURCES
+    if "labels" in requested_sources:
+        log_sources.add("imu")   # labels are derived from kayak IMU
+
     dfs: dict[str, pd.DataFrame] = {}
-    for src in needed_sources:
+    for src in sorted(log_sources):
         path = _log_path(log_dir, src, session)
         if not path.exists():
             print(f"[warn] {src} log missing: {path}")
@@ -158,6 +178,13 @@ def main() -> None:
             continue
         dfs[src] = parsers.parse(src, path)
         print(f"[ok] parsed {src}: {len(dfs[src])} rows from {path.name}")
+
+    if "labels" in requested_sources:
+        cfg = labels_cfg if labels_cfg is not None else LabelConfig()
+        dfs["labels"] = compute_labels(dfs.get("imu", pd.DataFrame()), cfg)
+        print(f"[ok] computed labels: {len(dfs['labels'])} rows "
+              f"(assist delay={cfg.assist_delay_ms:g}ms window={cfg.assist_window_ms:g}ms, "
+              f"turn delay={cfg.turn_delay_ms:g}ms window={cfg.turn_window_ms:g}ms)")
 
     # Determine session start from earliest timestamp across parsed logs
     starts = [df["timestamp"].iloc[0] for df in dfs.values() if not df.empty]

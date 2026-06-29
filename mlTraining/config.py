@@ -14,12 +14,35 @@ RAW_DIR = DATA_DIR / "raw"
 CHECKPOINT_DIR = BASE_DIR / "checkpoints"
 
 # ── IMU Sensor Config ─────────────────────────────────────────────────────
-SAMPLE_RATE_HZ = 20          # Oar IMU rate over RF link
+# Both paddle IMU (over RF) and kayak IMU (local on Pi) sample at this rate.
+# Keep them aligned -- the regression pipeline pairs samples by timestamp
+# and the math assumes a single shared period.
+SAMPLE_RATE_HZ = 20
 CHANNEL_NAMES = [
     "accel_x", "accel_y", "accel_z",
     "gyro_x", "gyro_y", "gyro_z",
 ]
 NUM_CHANNELS = len(CHANNEL_NAMES)
+
+# ── Kayak body-frame axes ─────────────────────────────────────────────────
+# After the IMU remap commit, kayak accel_x is forward, gyro_z is yaw rate.
+# Pulled out as constants so labels.py / dataset.py don't hardcode strings.
+KAYAK_FORWARD_ACCEL_COLUMN = "accel_x"
+KAYAK_YAW_RATE_COLUMN = "gyro_z"
+
+# ── Regression-label generation ───────────────────────────────────────────
+# For each kayak IMU sample at time t, the label is the mean of a future
+# window of kayak signal starting `delay` ms ahead and lasting `window` ms.
+# At 20 Hz: 100 ms = 2 samples, 600 ms = 12 samples, 2000 ms = 40 samples.
+LABEL_ASSIST_DELAY_MS = 100      # head start so model predicts future, not past
+LABEL_ASSIST_WINDOW_MS = 600     # wide enough to absorb session-to-session jitter
+LABEL_TURN_DELAY_MS = 200        # yaw response is slower than surge
+LABEL_TURN_WINDOW_MS = 2000      # longer integration window for smoother turn target
+
+# Divisors that bring labels into roughly unit scale before training.
+# Start at 1.0; once you have data, replace with ~95th percentile of |label|.
+LABEL_ASSIST_NORM_SCALE = 1.0
+LABEL_TURN_NORM_SCALE = 1.0
 
 # ── Windowing ──────────────────────────────────────────────────────────────
 # A full paddle stroke cycle takes roughly 1-2 seconds.  A 2-second window

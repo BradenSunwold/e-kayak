@@ -185,9 +185,23 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     ax_lbl.plot(traj["timestamp"], traj["velocity"],
                 color="tab:green", linewidth=1.0, label="sim forward velocity")
     ax_lbl.plot(traj["timestamp"], np.degrees(traj["heading_rad"]),
-                color="tab:purple", linewidth=1.0, label="sim heading (deg)")
+                color="tab:purple", linewidth=1.0, label="sim heading (deg, integrated)")
+
+    # BNO055 fused heading — anchored at the session start and unwrapped so
+    # the trace doesn't jump at the 0/360 boundary. Negated to match the
+    # math convention used by our gyro_z integration: BNO055 reports
+    # compass heading (positive clockwise from north), while our integrated
+    # heading follows the math convention (positive counterclockwise).
+    # After this flip, the gap between the two traces is gyro drift.
+    if "heading" in kayak_df.columns and not kayak_df["heading"].isna().all():
+        measured_unwrapped = np.unwrap(kayak_df["heading"].to_numpy(dtype=float), period=360.0)
+        measured_relative = -(measured_unwrapped - measured_unwrapped[0])
+        ax_lbl.plot(kayak_df["timestamp"], measured_relative,
+                    color="tab:olive", linewidth=1.0, linestyle="--",
+                    label="measured heading (BNO055, deg, sign-flipped)")
+
     ax_lbl.legend(loc="upper right", fontsize=7)
-    ax_lbl.set_title("Simulator state (integrated)")
+    ax_lbl.set_title("Simulator state — integrated heading vs. measured")
     ax_lbl.set_xlabel("time")
     ax_lbl.grid(True, alpha=0.3)
 

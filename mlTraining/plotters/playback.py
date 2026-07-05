@@ -16,6 +16,8 @@ Usage:
       --start 30 --end 120        # seconds from session start
   python -m plotters.playback plotters/configs/raw_signals.yaml \
       --speed 2.0                 # 2x real-time playback
+  python -m plotters.playback plotters/configs/raw_signals.yaml \
+      --ghost off                 # disable the label-driven ghost overlay
 
 Uses the same YAML config format as plot_session.py — only the session
 and log_dir fields are required; the labels_config block is optional and
@@ -37,7 +39,17 @@ from matplotlib.widgets import Button, Slider
 
 from plotters import parsers
 from plotters.labels import LabelConfig, compute_labels
-from plotters.sim_trajectory import TrajectoryConfig, compute_trajectory
+from plotters.sim_trajectory import (
+    TrajectoryConfig,
+    compute_ghost_trajectory_from_labels,
+    compute_trajectory,
+)
+
+
+# Ghost-boat source selector. 'label' drives the ghost from the regression
+# labels (sanity-checks the labeling pipeline). 'off' hides the ghost.
+# Will extend with 'model' / 'both' once trained ONNX models exist.
+GHOST_CHOICES = ("label", "off")
 
 
 SOURCE_TO_PREFIX = {
@@ -96,7 +108,7 @@ def _draw_boat(ax, x, y, heading_rad, length=2.0, color="tab:red"):
     ))
 
 
-def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_speed):
+def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_speed, ghost_source):
     # ── Load & align all sources ───────────────────────────────────────────
     imu_path = _log_path(log_dir, "imu", session)
     rf_path = _log_path(log_dir, "rf", session)
@@ -121,10 +133,21 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
         raise SystemExit("Time window selected too few kayak samples to play back.")
 
     # ── Compute trajectory + labels ───────────────────────────────────────
-    traj = compute_trajectory(kayak_df, TrajectoryConfig())
+    traj_cfg = TrajectoryConfig()
+    traj = compute_trajectory(kayak_df, traj_cfg)
     labels_df = compute_labels(kayak_df, labels_cfg)
     print(f"[ok] trajectory: x range [{traj.x.min():.1f}, {traj.x.max():.1f}], "
           f"y range [{traj.y.min():.1f}, {traj.y.max():.1f}]")
+
+    # Ghost trajectory: same integrator, fed by the labels instead of the
+    # raw IMU. Both boats end up with identical shared drift, so divergence
+    # between them reflects label-vs-truth differences rather than physics.
+    ghost_traj = None
+    if ghost_source == "label":
+        ghost_traj = compute_ghost_trajectory_from_labels(labels_df, traj_cfg)
+        print(f"[ok] ghost (label) trajectory: "
+              f"x range [{ghost_traj.x.min():.1f}, {ghost_traj.x.max():.1f}], "
+              f"y range [{ghost_traj.y.min():.1f}, {ghost_traj.y.max():.1f}]")
 
     # ── Figure layout ─────────────────────────────────────────────────────
     fig = plt.figure(figsize=(14, 9))
@@ -142,8 +165,17 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     ax_slider = fig.add_subplot(gs[4, :])
 
     # ── 2D simulation pane ────────────────────────────────────────────────
-    ax_sim.plot(traj.x, traj.y, color="lightgray", linewidth=0.8, label="full path")
-    recent_trail_line, = ax_sim.plot([], [], color="tab:red", linewidth=2.0, label="recent")
+    ax_sim.plot(traj.x, traj.y, color="lightgray", linewidth=0.8, label="real (full)")
+    recent_trail_line, = ax_sim.plot([], [], color="tab:red", linewidth=2.0, label="real (recent)")
+    if ghost_traj is not None:
+        ax_sim.plot(ghost_traj.x, ghost_traj.y,
+                    color="lightsteelblue", linewidth=0.8, linestyle="--",
+                    label=f"ghost-{ghost_source} (full)")
+        ghost_recent_line, = ax_sim.plot(
+            [], [], color="tab:blue", linewidth=2.0, alpha=0.7,
+            label=f"ghost-{ghost_source} (recent)")
+    else:
+        ghost_recent_line = None
     ax_sim.set_aspect("equal", adjustable="datalim")
     ax_sim.set_title("Kayak path (top-down, integrated from IMU)")
     ax_sim.set_xlabel("x (drift units, not metric)")
@@ -151,10 +183,14 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     ax_sim.grid(True, alpha=0.3)
     ax_sim.legend(loc="upper left", fontsize=8)
 
-    # Boat marker — we recreate it each frame because FancyArrow doesn't
+    # Boat marker(s) — recreated each frame because FancyArrow doesn't
     # support in-place updates of position+rotation cleanly.
-    boat_state = {"artist": _draw_boat(ax_sim, traj.x.iloc[0], traj.y.iloc[0],
-                                       traj.heading_rad.iloc[0])}
+    boat_state = {"real": _draw_boat(ax_sim, traj.x.iloc[0], traj.y.iloc[0],
+                                     traj.heading_rad.iloc[0], color="tab:red")}
+    if ghost_traj is not None:
+        boat_state["ghost"] = _draw_boat(
+            ax_sim, ghost_traj.x.iloc[0], ghost_traj.y.iloc[0],
+            ghost_traj.heading_rad.iloc[0], color="tab:blue")
 
     # ── Time-series subpanels ─────────────────────────────────────────────
     if not paddle_df.empty:
@@ -226,14 +262,24 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
         i = int(i)
         i = max(0, min(num_frames - 1, i))
 
-        # Update boat position+orientation (recreate the patch — cheap).
-        boat_state["artist"].remove()
-        boat_state["artist"] = _draw_boat(
-            ax_sim, traj.x.iloc[i], traj.y.iloc[i], traj.heading_rad.iloc[i])
+        # Update real boat (recreate the patch — cheap).
+        boat_state["real"].remove()
+        boat_state["real"] = _draw_boat(
+            ax_sim, traj.x.iloc[i], traj.y.iloc[i], traj.heading_rad.iloc[i],
+            color="tab:red")
 
-        # Update brighter "recent" trail.
+        # Update brighter "recent" trail for the real boat.
         lo = max(0, i - recent_n)
         recent_trail_line.set_data(traj.x.iloc[lo:i + 1], traj.y.iloc[lo:i + 1])
+
+        # Update ghost boat and its trail if active.
+        if ghost_traj is not None:
+            boat_state["ghost"].remove()
+            boat_state["ghost"] = _draw_boat(
+                ax_sim, ghost_traj.x.iloc[i], ghost_traj.y.iloc[i],
+                ghost_traj.heading_rad.iloc[i], color="tab:blue")
+            ghost_recent_line.set_data(
+                ghost_traj.x.iloc[lo:i + 1], ghost_traj.y.iloc[lo:i + 1])
 
         # Move playhead lines on every time-series subpanel.
         t = traj["timestamp"].iloc[i]
@@ -283,10 +329,13 @@ def main():
                     help="End of playback window. HH:MM:SS or seconds-from-start.")
     ap.add_argument("--speed", type=float, default=1.0,
                     help="Playback speed multiplier (1.0 = real-time).")
+    ap.add_argument("--ghost", choices=GHOST_CHOICES, default="label",
+                    help="Ghost-boat overlay source. 'label' drives the ghost "
+                         "from regression labels; 'off' hides it.")
     args = ap.parse_args()
 
     session, log_dir, labels_cfg = _load_yaml(args.config)
-    run_playback(session, log_dir, labels_cfg, args.start, args.end, args.speed)
+    run_playback(session, log_dir, labels_cfg, args.start, args.end, args.speed, args.ghost)
 
 
 if __name__ == "__main__":

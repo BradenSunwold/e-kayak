@@ -2,15 +2,16 @@
 Utilities: device selection, reproducibility seeding, and normalization stats I/O.
 """
 
+from __future__ import annotations
+
 import json
 import random
+from pathlib import Path
 
 import numpy as np
 import torch
 
-from config import CHECKPOINT_DIR, RANDOM_SEED
-
-NORM_STATS_PATH = CHECKPOINT_DIR / "norm_stats.json"
+from config import RANDOM_SEED
 
 
 def get_device():
@@ -22,22 +23,24 @@ def get_device():
     return torch.device("cpu")
 
 
-def seed_everything(seed=RANDOM_SEED):
+def seed_everything(seed: int = RANDOM_SEED) -> None:
     """Set seeds for Python, NumPy, and PyTorch so results are reproducible."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
 
 
-def save_norm_stats(means, stds):
-    """Save per-channel mean/std to JSON so inference can use the same normalization."""
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    with open(NORM_STATS_PATH, "w") as f:
+def save_norm_stats(path: Path, means: np.ndarray, stds: np.ndarray) -> None:
+    """Save per-channel paddle mean/std to JSON so inference can apply the
+    same normalization the model saw during training."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
         json.dump({"means": means.tolist(), "stds": stds.tolist()}, f, indent=2)
 
 
-def load_norm_stats():
-    """Load per-channel mean/std from JSON. Returns (means, stds) as numpy arrays."""
-    with open(NORM_STATS_PATH) as f:
+def load_norm_stats(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load per-channel mean/std from JSON. Returns (means, stds) as float32."""
+    with open(path) as f:
         data = json.load(f)
-    return np.array(data["means"]), np.array(data["stds"])
+    return (np.asarray(data["means"], dtype=np.float32),
+            np.asarray(data["stds"], dtype=np.float32))

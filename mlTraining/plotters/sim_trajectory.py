@@ -113,3 +113,30 @@ def compute_trajectory(kayak_df: pd.DataFrame, config: TrajectoryConfig) -> pd.D
         "heading_rad": heading_rad,
         "velocity": velocity,
     })
+
+
+def compute_ghost_trajectory_from_labels(labels_df: pd.DataFrame,
+                                         config: TrajectoryConfig) -> pd.DataFrame:
+    """Drive a ghost trajectory from regression labels instead of raw kayak IMU.
+
+    The labels are unit-matched substitutes for the kayak's forward accel
+    and yaw rate (they're future-window means of those exact signals), so
+    we can run them through the same integrator. Same physics for ghost
+    and real boats means their absolute drift cancels in the comparison —
+    only the *difference* in their paths reflects label-vs-truth divergence.
+
+    NaN labels at the end of the session (where the future window ran off
+    the data) are filled with 0 so the cumulative integrators don't poison.
+    The ghost just sits still in those samples — fine, it's session end.
+    """
+    if labels_df.empty:
+        return pd.DataFrame(columns=["timestamp", "x", "y", "heading_rad", "velocity"])
+
+    # Rename label columns into the column names the integrator expects.
+    # Same units, same role — just a different upstream source.
+    ghost_input_df = pd.DataFrame({
+        "timestamp": labels_df["timestamp"],
+        config.forward_accel_column: labels_df["assist_label"].fillna(0.0),
+        config.yaw_rate_column: labels_df["turn_label"].fillna(0.0),
+    })
+    return compute_trajectory(ghost_input_df, config)

@@ -41,26 +41,33 @@ LABEL_TURN_WINDOW_MS = 2000      # longer integration window for smoother turn t
 
 # Divisors that bring labels into roughly unit scale before training.
 # Start at 1.0; once you have data, replace with ~95th percentile of |label|.
-LABEL_ASSIST_NORM_SCALE = 1.0
-LABEL_TURN_NORM_SCALE = 1.0
+LABEL_ASSIST_NORM_SCALE = 0.339     # 1.0
+LABEL_TURN_NORM_SCALE = 0.055       # 1.0
 
-# ── Windowing ──────────────────────────────────────────────────────────────
-# A full paddle stroke cycle takes roughly 1-2 seconds.  A 2-second window
-# comfortably captures one full stroke.
-WINDOW_DURATION_SEC = 2.0
-WINDOW_STRIDE_SEC = 0.5      # 75% overlap between consecutive windows
+# ── Paddle input windows (per-model) ──────────────────────────────────────
+# Each model gets a fixed window of paddle IMU history at every prediction.
+# Sizes are tuned to the timescale of what the model needs to detect:
+#   Assist  — short window: stroke onset shows up in 200-300 ms of paddle data.
+#   Turn    — long window: turn intent often needs a full stroke or two of
+#             context to disambiguate from straight paddling.
+# Stride is always 1 sample — every sample becomes a training example, which
+# matches the streaming inference pattern on the Pi (one inference per IMU
+# packet). The 75% stride from Phase 1 is obsolete here.
+WINDOW_SIZE_ASSIST = 5   # 250 ms at 20 Hz
+WINDOW_SIZE_TURN = 40    # 2 s at 20 Hz
 
-WINDOW_SIZE = int(SAMPLE_RATE_HZ * WINDOW_DURATION_SEC)    # 40 samples
-WINDOW_STRIDE = int(SAMPLE_RATE_HZ * WINDOW_STRIDE_SEC)    # 10 samples
+# Model identifiers. Used as the string passed to build_model() and as the
+# key for selecting which label column a SessionDataset returns.
+MODEL_TYPE_ASSIST = "assist"
+MODEL_TYPE_TURN = "turn"
+MODEL_TYPES = (MODEL_TYPE_ASSIST, MODEL_TYPE_TURN)
 
-# ── Labels ─────────────────────────────────────────────────────────────────
-# Phase 1: binary stroke / no-stroke
-# Phase 2: change to {"no_stroke": 0, "left_stroke": 1, "right_stroke": 2}
-LABEL_MAP = {
-    "no_stroke": 0,
-    "stroke": 1,
-}
-NUM_CLASSES = len(LABEL_MAP)
+# ── Evaluation ────────────────────────────────────────────────────────────
+# When computing direction accuracy for the turn model, samples with
+# |label| below this cutoff are considered neutral (boat effectively not
+# turning) and skipped — sign() of ~0 is not a meaningful "left vs right"
+# call. Kept centralized so train.py and evaluate.py stay consistent.
+DIRECTION_ACCURACY_THRESHOLD = 0.05
 
 # ── Training Hyperparameters ──────────────────────────────────────────────
 # How many windows the model processes at once before updating its weights.

@@ -1,23 +1,31 @@
 """
-Training loop for the paddle stroke classifier.
+Training loop for the paddle regression models.
 
-What this script does:
-1. Discovers all labeled CSVs in data/
-2. Splits them into train/val sets BY FILE (not by window -- prevents leakage)
-3. Computes normalization stats from training files only, saves to checkpoints/
-4. Creates DataLoaders for train and val sets
-5. Trains the CNN, saving the best model (lowest val loss) to checkpoints/
+Trains one model (assist or turn) end-to-end from a corpus of session logs.
 
 Usage:
-    python train.py
+  python train.py --model assist --log-dirs /path/to/logs1 [more dirs...]
+  python train.py --model turn   --log-dirs /path/to/logs1
 
-MPS notes (Apple Silicon):
-    - num_workers=0: MPS doesn't support multiprocess data loading
-    - pin_memory=False: only useful for CUDA, not MPS
+Per-run artifacts (one set per model type):
+  checkpoints/{model}_best.pt          — model weights + training metadata
+  checkpoints/{model}_norm_stats.json  — paddle z-score means/stds
+  checkpoints/{model}_meta.json        — LabelConfig snapshot + session list
+
+The .pt file is what evaluate.py / export_onnx.py load. The two JSON files
+travel with it so training-time context (which sessions were used, what
+label config was in effect, what normalization scale to apply) never has
+to be reconstructed by hand later.
 """
 
-import random
+from __future__ import annotations
 
+import argparse
+import dataclasses
+import json
+from pathlib import Path
+
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -25,233 +33,305 @@ from torch.utils.data import DataLoader
 from config import (
     BATCH_SIZE,
     CHECKPOINT_DIR,
+    DIRECTION_ACCURACY_THRESHOLD,
     EPOCHS,
-    LABEL_MAP,
     LEARNING_RATE,
+    MODEL_TYPES,
     RANDOM_SEED,
     VAL_SPLIT,
     WEIGHT_DECAY,
 )
-from dataset import StrokeDataset, compute_norm_stats, discover_csv_files
-from model import StrokeCNN
+from dataset import SessionMeta, build_train_val_datasets
+from model import build_model, count_parameters, input_window_size
+from plotters.labels import LabelConfig
 from utils import get_device, save_norm_stats, seed_everything
 
 
-def split_files(file_list, val_split=VAL_SPLIT):
-    """
-    Split file list into train and val sets, stratified by class.
-
-    Stratification = each class is represented in both splits proportionally.
-    With only a handful of files per class, an unstratified random split can
-    silently put every file of a class on one side -- which breaks validation
-    (you can't measure accuracy on a class with zero samples in val).
-
-    We also split by FILE, not by window. If we split by window, adjacent
-    windows from the same file would end up in both train and val (because
-    of the 75% overlap), and the model would essentially memorize the
-    validation set.
-    """
-    random.seed(RANDOM_SEED)
-
-    by_label = {}
-    for path, label in file_list:
-        by_label.setdefault(label, []).append((path, label))
-
-    train_files, val_files = [], []
-    for label, files in by_label.items():
-        shuffled = files.copy()
-        random.shuffle(shuffled)
-        n_val = max(1, int(len(shuffled) * val_split))
-        val_files.extend(shuffled[:n_val])
-        train_files.extend(shuffled[n_val:])
-
-    return train_files, val_files
-
-
-def train_one_epoch(model, loader, criterion, optimizer, device):
-    """Run one training epoch. Returns average loss."""
-    model.train()  # enable dropout and batchnorm training behavior
-    total_loss = 0.0
-    total_correct = 0
-    total_samples = 0
-
-    for windows, labels in loader:
-        windows = windows.to(device)  # (batch, 6, 40)
-        labels = labels.to(device)    # (batch,)
-
-        # Forward pass: model predicts, loss measures how wrong it is
-        predictions = model(windows)          # (batch, 2)
-        loss = criterion(predictions, labels)
-
-        # Backward pass: compute gradients, update weights
-        optimizer.zero_grad()  # clear gradients from previous batch
-        loss.backward()        # compute new gradients
-        optimizer.step()       # adjust weights using gradients
-
-        # Track metrics
-        total_loss += loss.item() * labels.size(0)
-        total_correct += (predictions.argmax(dim=1) == labels).sum().item()
-        total_samples += labels.size(0)
-
-    avg_loss = total_loss / total_samples
-    accuracy = total_correct / total_samples
-    return avg_loss, accuracy
-
-
-def validate(model, loader, criterion, device):
-    """
-    Run validation. Returns (avg_loss, overall_accuracy, per_class_accuracy).
-
-    per_class_accuracy is a dict mapping class_int -> accuracy for that class.
-    A class missing from the dict means it had zero samples in the val set.
-    """
-    model.eval()  # disable dropout, batchnorm uses running stats
-    total_loss = 0.0
-    total_correct = 0
-    total_samples = 0
-    class_correct = {}  # class_int -> count of correct predictions
-    class_total = {}    # class_int -> total count of samples
-
-    with torch.no_grad():  # no gradient computation needed for validation
-        for windows, labels in loader:
-            windows = windows.to(device)
-            labels = labels.to(device)
-
-            predictions = model(windows)
-            loss = criterion(predictions, labels)
-
-            predicted_labels = predictions.argmax(dim=1)
-            total_loss += loss.item() * labels.size(0)
-            total_correct += (predicted_labels == labels).sum().item()
-            total_samples += labels.size(0)
-
-            # Tally correct/total per class for this batch
-            for label_tensor in torch.unique(labels):
-                label = label_tensor.item()
-                mask = labels == label_tensor
-                class_correct[label] = class_correct.get(label, 0) + \
-                    (predicted_labels[mask] == label_tensor).sum().item()
-                class_total[label] = class_total.get(label, 0) + mask.sum().item()
-
-    avg_loss = total_loss / total_samples
-    accuracy = total_correct / total_samples
-    per_class_acc = {
-        label: class_correct[label] / class_total[label]
-        for label in class_total
+def _checkpoint_paths(model_type: str) -> dict[str, Path]:
+    """Where the three artifacts for a given model type live."""
+    return {
+        "checkpoint": CHECKPOINT_DIR / f"{model_type}_best.pt",
+        "norm_stats": CHECKPOINT_DIR / f"{model_type}_norm_stats.json",
+        "metadata":   CHECKPOINT_DIR / f"{model_type}_meta.json",
     }
-    return avg_loss, accuracy, per_class_acc
+
+
+def train_one_epoch(model, loader, criterion, optimizer, device) -> float:
+    """Run one training pass over the data. Returns average per-sample loss."""
+    model.train()  # enable dropout + batchnorm training-mode
+    total_loss = 0.0
+    total_samples = 0
+
+    for windows, targets in loader:
+        windows = windows.to(device)
+        targets = targets.to(device)
+
+        # Forward — model predicts, loss measures how wrong.
+        predictions = model(windows)
+        loss = criterion(predictions, targets)
+
+        # Backward — compute gradients, update weights.
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        n = targets.size(0)
+        total_loss += loss.item() * n
+        total_samples += n
+
+    return total_loss / max(total_samples, 1)
+
+
+def validate(model, loader, criterion, device) -> dict[str, float]:
+    """Run one validation pass. Returns average loss plus regression metrics.
+
+    Metrics returned:
+      loss                 — average per-sample loss under `criterion`
+      mae                  — mean absolute error, same units as the label
+      mae_percent          — MAE as a percentage of mean(|target|). Gives a
+                             scale-independent read on error magnitude: 12
+                             means "typical error is 12% of a typical label."
+                             NaN when mean(|target|) is essentially zero.
+      r2                   — 1 - (SS_residual / SS_total). 1 is perfect,
+                             0 is "as good as always predicting the mean,"
+                             negative is worse than predicting the mean.
+      bias                 — mean(prediction - target). Should be ~0. A
+                             consistent nonzero value means systematic
+                             over/under-prediction.
+      direction_accuracy   — fraction of non-neutral samples where
+                             sign(prediction) == sign(target). NaN if no
+                             samples pass the neutrality threshold.
+                             Only meaningful for the turn model — assist is
+                             one-sided so its sign is nearly constant.
+    """
+    model.eval()
+    total_loss = 0.0
+    total_samples = 0
+    all_preds: list[torch.Tensor] = []
+    all_targets: list[torch.Tensor] = []
+
+    with torch.no_grad():
+        for windows, targets in loader:
+            windows = windows.to(device)
+            targets = targets.to(device)
+            predictions = model(windows)
+            loss = criterion(predictions, targets)
+
+            n = targets.size(0)
+            total_loss += loss.item() * n
+            total_samples += n
+            all_preds.append(predictions.cpu())
+            all_targets.append(targets.cpu())
+
+    preds = torch.cat(all_preds).numpy()
+    targets = torch.cat(all_targets).numpy()
+
+    avg_loss = total_loss / max(total_samples, 1)
+    mae = float(np.mean(np.abs(preds - targets)))
+    bias = float(np.mean(preds - targets))
+
+    # Scale-independent MAE. Divide by mean absolute target so tiny labels
+    # near 0 don't dominate. NaN if the target set is essentially constant
+    # at zero — dividing would be meaningless.
+    mean_abs_target = float(np.mean(np.abs(targets)))
+    mae_percent = 100.0 * mae / mean_abs_target if mean_abs_target > 1e-6 else float("nan")
+
+    # R² needs total variance of the targets; guard against a constant
+    # val set where the denominator would be 0.
+    ss_res = float(np.sum((targets - preds) ** 2))
+    ss_tot = float(np.sum((targets - np.mean(targets)) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+    non_neutral = np.abs(targets) > DIRECTION_ACCURACY_THRESHOLD
+    if non_neutral.sum() > 0:
+        direction_accuracy = float(
+            np.mean(np.sign(preds[non_neutral]) == np.sign(targets[non_neutral])))
+    else:
+        direction_accuracy = float("nan")
+
+    return {
+        "loss": avg_loss,
+        "mae": mae,
+        "mae_percent": mae_percent,
+        "r2": r2,
+        "bias": bias,
+        "direction_accuracy": direction_accuracy,
+    }
+
+
+def save_metadata(path: Path,
+                  model_type: str,
+                  label_config: LabelConfig,
+                  train_sessions: list[SessionMeta],
+                  val_sessions: list[SessionMeta],
+                  split_info: dict) -> None:
+    """Snapshot everything needed to make sense of this checkpoint later:
+    which sessions it trained on, what label definition it was trained
+    against, and how train/val was split. The .pt file has the weights;
+    this JSON has the human (and evaluate.py) context.
+
+    split_info fields recorded:
+      filter_training_mode_only — whether MANUAL/AUTO samples were filtered out
+      single_session_split      — whether the "one session, split temporally" hack was used
+      val_split                 — the val fraction used (of sessions or of samples)
+    """
+    metadata = {
+        "model_type": model_type,
+        "input_window_size": input_window_size(model_type),
+        "label_config": dataclasses.asdict(label_config),
+        "split_info": split_info,
+        "train_sessions": [
+            {"log_dir": str(m.log_dir), "name": m.name} for m in train_sessions
+        ],
+        "val_sessions": [
+            {"log_dir": str(m.log_dir), "name": m.name} for m in val_sessions
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def _format_metric(value: float, width: int = 8, precision: int = 4) -> str:
+    """Consistent per-metric formatting. NaN prints as 'N/A' right-aligned."""
+    if np.isnan(value):
+        return f"{'N/A':>{width}}"
+    return f"{value:>{width}.{precision}f}"
 
 
 def main():
-    seed_everything()
+    parser = argparse.ArgumentParser(description="Train paddle regression model.")
+    parser.add_argument("--model", choices=MODEL_TYPES, required=True,
+                        help="Which model to train ('assist' or 'turn').")
+    parser.add_argument("--log-dirs", nargs="+", type=Path, required=True,
+                        help="Directories containing paired imuLog_*.log and rfLog_*.log files.")
+    parser.add_argument("--epochs", type=int, default=EPOCHS,
+                        help=f"Training epochs (default {EPOCHS}).")
+    parser.add_argument("--val-split", type=float, default=VAL_SPLIT,
+                        help=f"Fraction of sessions held out for validation (default {VAL_SPLIT}).")
+    parser.add_argument("--random-seed", type=int, default=RANDOM_SEED,
+                        help="Random seed for reproducible splits and weight init.")
+    parser.add_argument("--all-modes", action="store_true",
+                        help="Include paddle samples from all motor modes. "
+                             "Default is TRAINING-mode-only, since motor thrust in "
+                             "MANUAL/AUTO contaminates the kayak IMU labels.")
+    parser.add_argument("--single-session-split", action="store_true",
+                        help="Split one session temporally into train/val chunks "
+                             "instead of splitting across sessions. Smoke-test only — "
+                             "val metrics are not honest because samples are correlated.")
+    args = parser.parse_args()
+
+    seed_everything(args.random_seed)
     device = get_device()
     print(f"Using device: {device}")
 
-    # Discover and split data files
-    all_files = discover_csv_files()
-    if len(all_files) < 2:
-        print(f"Found {len(all_files)} CSV file(s) in data/. Need at least 2 "
-              "(one for train, one for validation). Collect more data!")
-        return
+    # ── Discover, split, and build datasets ────────────────────────────────
+    label_config = LabelConfig()
+    print(f"Discovering sessions across {len(args.log_dirs)} log directory(ies)...")
 
-    train_files, val_files = split_files(all_files)
-    print(f"Train files: {len(train_files)}, Validation files: {len(val_files)}")
-    for path, label in train_files:
-        print(f"  TRAIN:      {path.name} (label={label})")
-    for path, label in val_files:
-        print(f"  VALIDATION: {path.name} (label={label})")
+    train_dataset, val_dataset, means, stds, train_sessions, val_sessions = \
+        build_train_val_datasets(
+            args.log_dirs, args.model, label_config,
+            args.val_split, args.random_seed,
+            filter_training_mode_only=not args.all_modes,
+            single_session_split=args.single_session_split,
+        )
 
-    # Compute normalization stats from training data only
-    means, stds = compute_norm_stats(train_files)
-    save_norm_stats(means, stds)
-    print(f"Norm stats saved (means={means.round(3)}, stds={stds.round(3)})")
+    print(f"  Train sessions: {len(train_sessions)} "
+          f"({sum(len(ds) for ds in train_dataset.datasets)} samples)")
+    for m in train_sessions:
+        print(f"    TRAIN:      {m.log_dir.name}/{m.name}")
+    print(f"  Validation sessions: {len(val_sessions)} "
+          f"({sum(len(ds) for ds in val_dataset.datasets)} samples)")
+    for m in val_sessions:
+        print(f"    VALIDATION: {m.log_dir.name}/{m.name}")
+    print(f"  Paddle normalization: means={means.round(3)}, stds={stds.round(3)}")
 
-    # Create datasets and loaders
-    train_dataset = StrokeDataset(train_files, means, stds)
-    val_dataset = StrokeDataset(val_files, means, stds)
-    print(f"Train windows: {len(train_dataset)}, Validation windows: {len(val_dataset)}")
+    # Label distribution stats — helps interpret raw MAE below.
+    val_targets = np.concatenate([ds.targets[ds.valid_indices]
+                                  for ds in val_dataset.datasets])
+    print(f"  Val label stats: "
+          f"mean={val_targets.mean():+.4f}  "
+          f"std={val_targets.std():.4f}  "
+          f"mean|·|={np.mean(np.abs(val_targets)):.4f}  "
+          f"p95|·|={np.percentile(np.abs(val_targets), 95):.4f}  "
+          f"(N={val_targets.size})")
 
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,       # randomize window order each epoch
-        num_workers=0,       # MPS doesn't support multiprocess loading
-        pin_memory=False,    # only useful for CUDA
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+        num_workers=0, pin_memory=False,
     )
     val_loader = DataLoader(
-        val_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False,
+        val_dataset, batch_size=BATCH_SIZE, shuffle=False,
+        num_workers=0, pin_memory=False,
     )
 
-    # Create model, loss function, optimizer
-    model = StrokeCNN().to(device)
-    criterion = nn.CrossEntropyLoss()
+    # ── Build model, loss, optimizer ───────────────────────────────────────
+    model = build_model(args.model).to(device)
+    print(f"Model: {args.model} ({count_parameters(model):,} trainable parameters)")
+
+    # SmoothL1 is Huber loss — behaves like MSE for small errors, like MAE
+    # for large ones. More robust to outlier labels than pure MSE.
+    criterion = nn.SmoothL1Loss()
     optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY,
-    )
+        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
-    # Count parameters so you know model size
-    num_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {num_params:,}")
+    # ── Write per-model sidecar artifacts up front ────────────────────────
+    paths = _checkpoint_paths(args.model)
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    save_norm_stats(paths["norm_stats"], means, stds)
+    save_metadata(paths["metadata"], args.model, label_config,
+                  train_sessions, val_sessions,
+                  split_info={
+                      "filter_training_mode_only": not args.all_modes,
+                      "single_session_split": args.single_session_split,
+                      "val_split": args.val_split,
+                  })
 
-    # Training loop
+    # ── Training loop ──────────────────────────────────────────────────────
     best_val_loss = float("inf")
     best_epoch = 0
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = CHECKPOINT_DIR / "best_model.pt"
 
-    # Class labels sorted by int, e.g. [(0, "no_stroke"), (1, "stroke")].
-    # Used to build per-class accuracy columns in a stable order.
-    class_labels = sorted(
-        ((lbl_int, lbl_name) for lbl_name, lbl_int in LABEL_MAP.items())
-    )
-    per_class_header = " ".join(
-        f"{name + ' Accuracy':>18}" for _, name in class_labels
-    )
+    print(f"\nTraining {args.model} for {args.epochs} epochs...")
+    header = (f"{'Epoch':>5} | {'Train Loss':>10} | "
+              f"{'Val Loss':>9} {'MAE':>8} {'MAE%':>7} {'R²':>8} {'Bias':>8} {'Dir Acc':>8} | "
+              f"{'Best':>4}")
+    print(header)
 
-    print(f"\nTraining for {EPOCHS} epochs...")
-    print(f"{'Epoch':>5} | {'Train Loss':>10} {'Train Accuracy':>15} | "
-          f"{'Validation Loss':>15} {'Validation Accuracy':>19} | "
-          f"{per_class_header} | {'Best':>4}")
+    for epoch in range(1, args.epochs + 1):
+        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        val = validate(model, val_loader, criterion, device)
 
-    for epoch in range(1, EPOCHS + 1):
-        train_loss, train_acc = train_one_epoch(
-            model, train_loader, criterion, optimizer, device
-        )
-        val_loss, val_acc, per_class_acc = validate(
-            model, val_loader, criterion, device
-        )
-
-        # Save checkpoint if this is the best validation loss so far
-        is_best = val_loss < best_val_loss
+        is_best = val["loss"] < best_val_loss
         if is_best:
-            best_val_loss = val_loss
+            best_val_loss = val["loss"]
             best_epoch = epoch
             torch.save({
                 "epoch": epoch,
+                "model_type": args.model,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
-                "val_loss": val_loss,
-                "val_acc": val_acc,
-                "per_class_acc": per_class_acc,
-            }, checkpoint_path)
+                "val_loss": val["loss"],
+                "val_mae": val["mae"],
+                "val_mae_percent": val["mae_percent"],
+                "val_r2": val["r2"],
+                "val_bias": val["bias"],
+                "val_direction_accuracy": val["direction_accuracy"],
+            }, paths["checkpoint"])
 
-        per_class_values = " ".join(
-            f"{per_class_acc[lbl_int]:18.4f}"
-            if lbl_int in per_class_acc else f"{'N/A':>18}"
-            for lbl_int, _ in class_labels
-        )
-        print(f"{epoch:5d} | {train_loss:10.4f} {train_acc:15.4f} | "
-              f"{val_loss:15.4f} {val_acc:19.4f} | "
-              f"{per_class_values} | {'*' if is_best else ''}")
+        print(f"{epoch:>5} | {train_loss:>10.4f} | "
+              f"{val['loss']:>9.4f} "
+              f"{_format_metric(val['mae'])} "
+              f"{_format_metric(val['mae_percent'], width=7, precision=1)} "
+              f"{_format_metric(val['r2'])} "
+              f"{_format_metric(val['bias'])} "
+              f"{_format_metric(val['direction_accuracy'])} | "
+              f"{'*' if is_best else ''}")
 
     print(f"\nDone! Best validation loss: {best_val_loss:.4f} at epoch {best_epoch}")
-    print(f"Checkpoint saved to: {checkpoint_path}")
+    print(f"  Checkpoint:  {paths['checkpoint']}")
+    print(f"  Norm stats:  {paths['norm_stats']}")
+    print(f"  Metadata:    {paths['metadata']}")
 
 
 if __name__ == "__main__":

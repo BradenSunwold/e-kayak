@@ -211,6 +211,12 @@ def main():
                         help=f"Fraction of sessions held out for validation (default {VAL_SPLIT}).")
     parser.add_argument("--random-seed", type=int, default=RANDOM_SEED,
                         help="Random seed for reproducible splits and weight init.")
+    parser.add_argument("--lr", type=float, default=LEARNING_RATE,
+                        help=f"Learning rate for Adam (default {LEARNING_RATE}). "
+                             "Try 3e-4 if val loss bounces; 3e-3 if training crawls.")
+    parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY,
+                        help=f"L2 regularization strength (default {WEIGHT_DECAY}). "
+                             "Bump to 1e-3 if overfitting; drop to 0 if underfitting.")
     parser.add_argument("--all-modes", action="store_true",
                         help="Include paddle samples from all motor modes. "
                              "Default is TRAINING-mode-only, since motor thrust in "
@@ -274,7 +280,8 @@ def main():
     # for large ones. More robust to outlier labels than pure MSE.
     criterion = nn.SmoothL1Loss()
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+        model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    print(f"  Optimizer: Adam(lr={args.lr}, weight_decay={args.weight_decay})")
 
     # ── Write per-model sidecar artifacts up front ────────────────────────
     paths = _checkpoint_paths(args.model)

@@ -3,9 +3,9 @@ class PIDController():
 
     Anti-windup uses two mechanisms:
       1. Integral term is clamped to ±integralLimit.
-      2. Conditional integration: integral only accumulates when it is helping
-         drive the output toward zero (i.e., integral and error have the same sign
-         AND the output is not already saturated in that direction).
+      2. Conditional integration: unwinding (error opposing the accumulator,
+         shrinking it toward zero) is always allowed; growth is blocked only
+         while the output is saturated in the direction of the error.
 
     Derivative is computed on the measurement (not the error) to avoid
     derivative kick on setpoint changes. The measurement difference must be
@@ -60,9 +60,12 @@ class PIDController():
 
         # --- Integral with conditional anti-windup ---
         candidate = self.mIntegral + error * self.mDt
-        # Only integrate when the integral is helping drive output toward zero:
-        # error and integral must share the same sign (or integral is zero).
-        if candidate * error >= 0:
+        # Unwinding always allowed; block growth only while the output is
+        # already railed in the error's direction (saturation from last cycle).
+        unwinding = abs(candidate) < abs(self.mIntegral)
+        saturated = ((self.mLastOutput >= self.mOutputMax and error > 0) or
+                     (self.mLastOutput <= self.mOutputMin and error < 0))
+        if unwinding or not saturated:
             self.mIntegral = max(-self.mIntegralLimit,
                                  min(self.mIntegralLimit, candidate))
         iTerm = self.mKi * self.mIntegral

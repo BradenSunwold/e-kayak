@@ -9,7 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="${SCRIPT_DIR}/dashboards"
 DEST="/var/lib/grafana/dashboards/ekayak"
 
-cp "${SRC}"/*.json "${DEST}/"
+# --delete removes dashboards from the provisioning dir that no longer exist
+# in the repo (e.g. the retired stroke_detector dashboard).
+rsync -av --delete --include='*.json' --exclude='*' "${SRC}/" "${DEST}/"
 chown -R grafana:grafana "${DEST}"
 systemctl restart grafana-server
 

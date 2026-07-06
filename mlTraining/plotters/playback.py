@@ -17,7 +17,11 @@ Usage:
   python -m plotters.playback plotters/configs/raw_signals.yaml \
       --speed 2.0                 # 2x real-time playback
   python -m plotters.playback plotters/configs/raw_signals.yaml \
-      --ghost off                 # disable the label-driven ghost overlay
+      --ghost model               # ghost driven by the trained ONNX models
+  python -m plotters.playback plotters/configs/raw_signals.yaml \
+      --ghost both                # label ghost AND model ghost overlaid
+  python -m plotters.playback plotters/configs/raw_signals.yaml \
+      --ghost off                 # disable ghost overlays
 
 Uses the same YAML config format as plot_session.py — only the session
 and log_dir fields are required; the labels_config block is optional and
@@ -27,6 +31,7 @@ controls the overlaid label traces.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -37,6 +42,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.patches import FancyArrow
 from matplotlib.widgets import Button, Slider
 
+from config import CHANNEL_NAMES, CHECKPOINT_DIR
 from plotters import parsers
 from plotters.labels import LabelConfig, compute_labels
 from plotters.sim_trajectory import (
@@ -46,10 +52,30 @@ from plotters.sim_trajectory import (
 )
 
 
-# Ghost-boat source selector. 'label' drives the ghost from the regression
-# labels (sanity-checks the labeling pipeline). 'off' hides the ghost.
-# Will extend with 'model' / 'both' once trained ONNX models exist.
-GHOST_CHOICES = ("label", "off")
+# Ghost-boat source selector.
+#   'label' — ghost driven by the regression labels (sanity-checks the
+#             labeling pipeline: this is the best a perfect model could do).
+#   'model' — ghost driven by the exported ONNX model predictions run over
+#             the paddle IMU stream (shows what the model actually learned).
+#   'both'  — label ghost and model ghost overlaid. The gap between them is
+#             model error; the gap between label ghost and the real boat is
+#             labeling/physics error.
+#   'off'   — no ghosts.
+GHOST_CHOICES = ("label", "model", "both", "off")
+
+# Colors per ghost source: (faint full-path color, bright recent-trail color).
+GHOST_COLORS = {
+    "label": ("lightsteelblue", "tab:blue"),
+    "model": ("darkseagreen", "tab:green"),
+}
+
+# How close a kayak-frame timestamp must be to a paddle-side prediction to
+# pair them; larger gaps (RF packet loss) fall back to zero prediction.
+_PREDICTION_ALIGNMENT_TOLERANCE = pd.Timedelta(milliseconds=100)
+
+# Batch size for offline ONNX inference. Big enough to amortize onnxruntime
+# call overhead; the (batch, 6, window) tensor stays tiny either way.
+_INFERENCE_BATCH_SIZE = 2048
 
 
 SOURCE_TO_PREFIX = {
@@ -108,6 +134,134 @@ def _draw_boat(ax, x, y, heading_rad, length=2.0, color="tab:red"):
     ))
 
 
+def _predict_model_series(model_type, paddle_df):
+    """Run an exported regression ONNX model over a whole session of paddle IMU.
+
+    This is the offline, batched twin of what MlManager does sample-by-sample
+    on the Pi: slide a window over the paddle stream, z-score normalize each
+    window with the training-time channel statistics, predict at every sample
+    (stride 1).
+
+    Returns a DataFrame with columns:
+      timestamp             — paddle sample time the window ends at
+      prediction            — raw model output (normalized label units)
+      prediction_physical   — prediction * label_norm_scale (physical units)
+
+    The first (window_size - 1) samples can't fill a window; their prediction
+    is 0 — the "buffer warming up" state on the Pi.
+
+    Raises FileNotFoundError if the model's exported artifacts are missing.
+    """
+    import onnxruntime as ort
+
+    onnx_path = CHECKPOINT_DIR / f"{model_type}_best.onnx"
+    norm_stats_path = CHECKPOINT_DIR / f"{model_type}_norm_stats.json"
+    meta_path = CHECKPOINT_DIR / f"{model_type}_onnx_meta.json"
+    for path in (onnx_path, norm_stats_path, meta_path):
+        if not path.exists():
+            raise FileNotFoundError(
+                f"missing {model_type} model artifact {path.name} "
+                f"(train + export first: python train.py --model {model_type} ... "
+                f"&& python export_onnx.py --model {model_type})")
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+    window_size = meta["window_size"]
+    label_norm_scale = meta["label_norm_scale"]
+
+    with open(norm_stats_path) as f:
+        stats = json.load(f)
+    channel_means = np.asarray(stats["means"], dtype=np.float32)
+    channel_stds = np.asarray(stats["stds"], dtype=np.float32)
+
+    # Drop incomplete RF packets — same cleanup the training dataset does.
+    clean = paddle_df.dropna(subset=CHANNEL_NAMES).reset_index(drop=True)
+    if len(clean) < window_size:
+        return pd.DataFrame(columns=["timestamp", "prediction", "prediction_physical"])
+
+    raw = clean[CHANNEL_NAMES].to_numpy(dtype=np.float32)
+    normalized = (raw - channel_means) / channel_stds
+
+    # All windows at stride 1 in one shot: shape (num_windows, channels, window),
+    # which is exactly the (batch, channels, time) layout the model expects.
+    windows = np.lib.stride_tricks.sliding_window_view(
+        normalized, window_size, axis=0)
+    num_windows = windows.shape[0]
+
+    onnx_session = ort.InferenceSession(onnx_path.as_posix(),
+                                        providers=["CPUExecutionProvider"])
+    input_name = onnx_session.get_inputs()[0].name
+
+    predictions = np.zeros(len(clean), dtype=np.float32)
+    for start in range(0, num_windows, _INFERENCE_BATCH_SIZE):
+        end = min(start + _INFERENCE_BATCH_SIZE, num_windows)
+        batch = np.ascontiguousarray(windows[start:end], dtype=np.float32)
+        (out,) = onnx_session.run(None, {input_name: batch})
+        # Window k covers samples [k .. k + window_size - 1], so its
+        # prediction belongs to the sample it ends at.
+        predictions[start + window_size - 1:end + window_size - 1] = out
+
+    return pd.DataFrame({
+        "timestamp": clean["timestamp"],
+        "prediction": predictions,
+        "prediction_physical": predictions * label_norm_scale,
+    })
+
+
+def _align_to_kayak(kayak_df, prediction_df):
+    """Nearest-in-time match of paddle-side predictions onto kayak timestamps.
+
+    Kayak frames with no prediction within the tolerance (RF dropouts, buffer
+    warmup at session start) get 0 — the ghost coasts through those gaps.
+    """
+    aligned = pd.merge_asof(
+        kayak_df[["timestamp"]],
+        prediction_df[["timestamp", "prediction_physical"]],
+        on="timestamp",
+        direction="nearest",
+        tolerance=_PREDICTION_ALIGNMENT_TOLERANCE,
+    )
+    return aligned["prediction_physical"].fillna(0.0)
+
+
+def _compute_model_ghost(kayak_df, paddle_df, labels_df, labels_cfg, traj_cfg):
+    """Ghost trajectory driven by ONNX model predictions.
+
+    Forward accel comes from the assist model (required). Yaw rate comes from
+    the turn model if its artifacts exist; otherwise it falls back to the
+    de-normalized turn *label* so the ghost still steers plausibly — with a
+    printed warning, since heading is then truth-derived, not model-derived.
+
+    Returns the trajectory DataFrame (frame-aligned with the kayak IMU), or
+    None if the assist model artifacts are missing or there is no paddle data.
+    """
+    if paddle_df.empty:
+        print("[warn] model ghost disabled: no paddle IMU data in this window")
+        return None
+
+    try:
+        assist_pred = _predict_model_series("assist", paddle_df)
+    except FileNotFoundError as e:
+        print(f"[warn] model ghost disabled: {e}")
+        return None
+    forward_accel = _align_to_kayak(kayak_df, assist_pred)
+
+    try:
+        turn_pred = _predict_model_series("turn", paddle_df)
+        yaw_rate = _align_to_kayak(kayak_df, turn_pred)
+        print("[ok] model ghost: assist + turn predictions")
+    except FileNotFoundError as e:
+        yaw_rate = labels_df["turn_label"].fillna(0.0) * labels_cfg.turn_norm_scale
+        print(f"[warn] model ghost heading falls back to turn labels: {e}")
+
+    ghost_input = pd.DataFrame({
+        "timestamp": kayak_df["timestamp"].reset_index(drop=True),
+        traj_cfg.forward_accel_column: forward_accel.reset_index(drop=True),
+        traj_cfg.yaw_rate_column: yaw_rate.reset_index(drop=True),
+    })
+    return compute_trajectory(ghost_input, traj_cfg)
+
+
 def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_speed, ghost_source):
     # ── Load & align all sources ───────────────────────────────────────────
     imu_path = _log_path(log_dir, "imu", session)
@@ -139,15 +293,27 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     print(f"[ok] trajectory: x range [{traj.x.min():.1f}, {traj.x.max():.1f}], "
           f"y range [{traj.y.min():.1f}, {traj.y.max():.1f}]")
 
-    # Ghost trajectory: same integrator, fed by the labels instead of the
-    # raw IMU. Both boats end up with identical shared drift, so divergence
-    # between them reflects label-vs-truth differences rather than physics.
-    ghost_traj = None
-    if ghost_source == "label":
-        ghost_traj = compute_ghost_trajectory_from_labels(labels_df, traj_cfg)
-        print(f"[ok] ghost (label) trajectory: "
-              f"x range [{ghost_traj.x.min():.1f}, {ghost_traj.x.max():.1f}], "
-              f"y range [{ghost_traj.y.min():.1f}, {ghost_traj.y.max():.1f}]")
+    # Ghost trajectories: same integrator, fed by labels and/or model
+    # predictions instead of the raw IMU. All boats share the same physics
+    # (and therefore the same drift), so divergence between paths reflects
+    # source-vs-truth differences rather than integration artifacts.
+    # Each entry: {"name", "traj"} — drawing state is attached later.
+    ghosts = []
+    if ghost_source in ("label", "both"):
+        label_ghost = compute_ghost_trajectory_from_labels(
+            labels_df, traj_cfg,
+            assist_norm_scale=labels_cfg.assist_norm_scale,
+            turn_norm_scale=labels_cfg.turn_norm_scale)
+        ghosts.append({"name": "label", "traj": label_ghost})
+    if ghost_source in ("model", "both"):
+        model_ghost = _compute_model_ghost(
+            kayak_df, paddle_df, labels_df, labels_cfg, traj_cfg)
+        if model_ghost is not None:
+            ghosts.append({"name": "model", "traj": model_ghost})
+    for ghost in ghosts:
+        print(f"[ok] ghost ({ghost['name']}) trajectory: "
+              f"x range [{ghost['traj'].x.min():.1f}, {ghost['traj'].x.max():.1f}], "
+              f"y range [{ghost['traj'].y.min():.1f}, {ghost['traj'].y.max():.1f}]")
 
     # ── Figure layout ─────────────────────────────────────────────────────
     fig = plt.figure(figsize=(14, 9))
@@ -167,15 +333,14 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     # ── 2D simulation pane ────────────────────────────────────────────────
     ax_sim.plot(traj.x, traj.y, color="lightgray", linewidth=0.8, label="real (full)")
     recent_trail_line, = ax_sim.plot([], [], color="tab:red", linewidth=2.0, label="real (recent)")
-    if ghost_traj is not None:
-        ax_sim.plot(ghost_traj.x, ghost_traj.y,
-                    color="lightsteelblue", linewidth=0.8, linestyle="--",
-                    label=f"ghost-{ghost_source} (full)")
-        ghost_recent_line, = ax_sim.plot(
-            [], [], color="tab:blue", linewidth=2.0, alpha=0.7,
-            label=f"ghost-{ghost_source} (recent)")
-    else:
-        ghost_recent_line = None
+    for ghost in ghosts:
+        full_color, recent_color = GHOST_COLORS[ghost["name"]]
+        ax_sim.plot(ghost["traj"].x, ghost["traj"].y,
+                    color=full_color, linewidth=0.8, linestyle="--",
+                    label=f"ghost-{ghost['name']} (full)")
+        ghost["recent_line"], = ax_sim.plot(
+            [], [], color=recent_color, linewidth=2.0, alpha=0.7,
+            label=f"ghost-{ghost['name']} (recent)")
     ax_sim.set_aspect("equal", adjustable="datalim")
     ax_sim.set_title("Kayak path (top-down, integrated from IMU)")
     ax_sim.set_xlabel("x (drift units, not metric)")
@@ -187,10 +352,10 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     # support in-place updates of position+rotation cleanly.
     boat_state = {"real": _draw_boat(ax_sim, traj.x.iloc[0], traj.y.iloc[0],
                                      traj.heading_rad.iloc[0], color="tab:red")}
-    if ghost_traj is not None:
-        boat_state["ghost"] = _draw_boat(
-            ax_sim, ghost_traj.x.iloc[0], ghost_traj.y.iloc[0],
-            ghost_traj.heading_rad.iloc[0], color="tab:blue")
+    for ghost in ghosts:
+        boat_state[ghost["name"]] = _draw_boat(
+            ax_sim, ghost["traj"].x.iloc[0], ghost["traj"].y.iloc[0],
+            ghost["traj"].heading_rad.iloc[0], color=GHOST_COLORS[ghost["name"]][1])
 
     # ── Time-series subpanels ─────────────────────────────────────────────
     if not paddle_df.empty:
@@ -272,14 +437,16 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
         lo = max(0, i - recent_n)
         recent_trail_line.set_data(traj.x.iloc[lo:i + 1], traj.y.iloc[lo:i + 1])
 
-        # Update ghost boat and its trail if active.
-        if ghost_traj is not None:
-            boat_state["ghost"].remove()
-            boat_state["ghost"] = _draw_boat(
-                ax_sim, ghost_traj.x.iloc[i], ghost_traj.y.iloc[i],
-                ghost_traj.heading_rad.iloc[i], color="tab:blue")
-            ghost_recent_line.set_data(
-                ghost_traj.x.iloc[lo:i + 1], ghost_traj.y.iloc[lo:i + 1])
+        # Update each active ghost boat and its trail.
+        for ghost in ghosts:
+            g_traj = ghost["traj"]
+            boat_state[ghost["name"]].remove()
+            boat_state[ghost["name"]] = _draw_boat(
+                ax_sim, g_traj.x.iloc[i], g_traj.y.iloc[i],
+                g_traj.heading_rad.iloc[i],
+                color=GHOST_COLORS[ghost["name"]][1])
+            ghost["recent_line"].set_data(
+                g_traj.x.iloc[lo:i + 1], g_traj.y.iloc[lo:i + 1])
 
         # Move playhead lines on every time-series subpanel.
         t = traj["timestamp"].iloc[i]
@@ -331,7 +498,9 @@ def main():
                     help="Playback speed multiplier (1.0 = real-time).")
     ap.add_argument("--ghost", choices=GHOST_CHOICES, default="label",
                     help="Ghost-boat overlay source. 'label' drives the ghost "
-                         "from regression labels; 'off' hides it.")
+                         "from regression labels, 'model' from the exported "
+                         "ONNX model predictions, 'both' overlays the two, "
+                         "'off' hides them.")
     args = ap.parse_args()
 
     session, log_dir, labels_cfg = _load_yaml(args.config)

@@ -14,7 +14,7 @@ from InfluxWriter import InfluxWriter
 
 
 class MlManager(multiprocessing.Process):
-    """Runs the stroke-detector ONNX model in its own OS process.
+    """Runs the assist regression ONNX model in its own OS process.
 
     Why a Process instead of a Thread: CPython's Global Interpreter Lock
     (the "GIL") serializes Python bytecode across threads in a single
@@ -36,12 +36,12 @@ class MlManager(multiprocessing.Process):
 
     def __init__(self, configDictionary, oarRawQueue, shutdownEvent,
                  logFilePath, logLevel, influxConfigPath, influxSession,
-                 strokeOutQueue=None):
+                 assistOutQueue=None):
         super().__init__()
         self.mConfigurator = configDictionary
         self.mIncomingQueue = oarRawQueue
         self.mShutdownEvent = shutdownEvent
-        self.mStrokeOutQueue = strokeOutQueue  # reserved for future motor integration
+        self.mAssistOutQueue = assistOutQueue  # assist predictions to MotorManager
         self.mLogFilePath = logFilePath
         self.mLogLevel = logLevel
         self.mInfluxConfigPath = influxConfigPath
@@ -86,11 +86,11 @@ class MlManager(multiprocessing.Process):
     def _loadArtifacts(self):
         """Resolve paths, load metadata + norm stats + ONNX model."""
         baseDir = Path(__file__).parent
-        modelPath = (baseDir / self.mConfigurator['modelPath']).resolve()
-        metaPath = (baseDir / self.mConfigurator['modelMetaPath']).resolve()
-        normStatsPath = (baseDir / self.mConfigurator['normStatsPath']).resolve()
+        modelPath = (baseDir / self.mConfigurator['assistModelPath']).resolve()
+        metaPath = (baseDir / self.mConfigurator['assistModelMetaPath']).resolve()
+        normStatsPath = (baseDir / self.mConfigurator['assistNormStatsPath']).resolve()
 
-        # Metadata sidecar describes the model's input shape and class labels
+        # Metadata sidecar describes the model's input shape and label scaling
         # so the Pi never duplicates training-side constants.
         with open(metaPath) as f:
             self.mMeta = json.load(f)
@@ -98,16 +98,21 @@ class MlManager(multiprocessing.Process):
         self.mOutputName = self.mMeta['output_name']
         self.mNumChannels = self.mMeta['num_channels']
         self.mWindowSize = self.mMeta['window_size']
-        self.mClassNames = self.mMeta['class_names']
+        # Multiply predictions by this to recover physical units (m/s^2 of
+        # future kayak forward acceleration). The raw normalized prediction is
+        # what the motor mapping consumes; physical units are for logging.
+        self.mLabelNormScale = self.mMeta['label_norm_scale']
         self.mLogger.info('Loaded model metadata from %s', metaPath.name)
         self.mLogger.info(
-            '  input_name=%s output_name=%s num_channels=%d window_size=%d',
-            self.mInputName, self.mOutputName, self.mNumChannels, self.mWindowSize)
-        self.mLogger.info('  class_names=%s', self.mClassNames)
+            '  model_type=%s input_name=%s output_name=%s num_channels=%d window_size=%d',
+            self.mMeta['model_type'], self.mInputName, self.mOutputName,
+            self.mNumChannels, self.mWindowSize)
+        self.mLogger.info('  label_normalization_scale=%.4f', self.mLabelNormScale)
         self.mLogger.info(
-            '  trained epoch=%d validation_accuracy=%.4f',
+            '  trained epoch=%d validation_loss=%.4f validation_mean_absolute_error=%.4f',
             self.mMeta['checkpoint_epoch'],
-            self.mMeta['checkpoint_validation_accuracy'])
+            self.mMeta['checkpoint_validation_loss'],
+            self.mMeta['checkpoint_validation_mae'])
 
         # Per-channel mean / standard deviation computed from the training set.
         # Same preprocessing the model saw during training must be applied here.
@@ -157,55 +162,41 @@ class MlManager(multiprocessing.Process):
         modelInput = normalized[None, :, :]   # add batch dimension: (1, channels, time)
 
         start = time.perf_counter()
-        (logits,) = self.mSession.run(None, {self.mInputName: modelInput})
+        (output,) = self.mSession.run(None, {self.mInputName: modelInput})
         latencyMilliseconds = (time.perf_counter() - start) * 1000.0
 
-        # Softmax converts unnormalized "logits" (raw model scores) into
-        # probabilities in [0, 1] that sum to 1.
-        rawLogits = logits[0]
-        shifted = rawLogits - rawLogits.max()
-        expo = np.exp(shifted)
-        probabilities = expo / expo.sum()
-        predictedIndex = int(np.argmax(rawLogits))
-        predictedName = self.mClassNames[predictedIndex]
-
-        # Pull the stroke-class probability out as a convenient scalar for the
-        # motor side. If the model is ever reshaped without a "stroke" class,
-        # fall back to the max-probability value.
-        if 'stroke' in self.mClassNames:
-            strokeProbability = float(probabilities[self.mClassNames.index('stroke')])
-        else:
-            strokeProbability = float(probabilities.max())
+        # The regression model outputs the prediction scalar directly — no
+        # softmax, no classes. Units are normalized label units: roughly
+        # [-1, 1] for typical paddling, where 1.0 means "kayak about to
+        # accelerate at 95th-percentile stroke intensity" and negative means
+        # decelerating (coasting drag). The motor side clamps and maps this;
+        # here it is passed through raw so logs show the true model output.
+        assistPrediction = float(output[0])
+        assistPredictionPhysical = assistPrediction * self.mLabelNormScale
 
         self.mInferenceCounter += 1
         if self.mInferenceCounter % self.mInferenceLogInterval == 0:
-            probabilityReport = ' '.join(
-                f'{name}={prob:.3f}' for name, prob in zip(self.mClassNames, probabilities))
             self.mLogger.info(
-                'Prediction: %s (%s) inference_latency=%.2fms',
-                predictedName, probabilityReport, latencyMilliseconds)
+                'Prediction: assist=%+.3f (%.3f m/s^2 forward acceleration) '
+                'inference_latency=%.2fms',
+                assistPrediction, assistPredictionPhysical, latencyMilliseconds)
         else:
             self.mLogger.debug(
-                'Prediction: %s (stroke_probability=%.3f) inference_latency=%.2fms',
-                predictedName, strokeProbability, latencyMilliseconds)
+                'Prediction: assist=%+.3f inference_latency=%.2fms',
+                assistPrediction, latencyMilliseconds)
 
-        # Send stroke probability to motor manager for auto-mode RPM control
-        if self.mStrokeOutQueue is not None:
-            self.mStrokeOutQueue.put(struct.pack('f', strokeProbability))
+        # Send the raw prediction to the motor manager for auto-mode RPM control
+        if self.mAssistOutQueue is not None:
+            self.mAssistOutQueue.put(struct.pack('f', assistPrediction))
 
         if self.mInfluxWriter:
-            # Note: no predicted_class tag. Tagging by the predicted class would
-            # split every field into two separate series (one per tag value),
-            # breaking the Grafana plots. predicted_class_index as a field
-            # already carries the same information.
-            fields = {
-                'stroke_probability': strokeProbability,
-                'predicted_class_index': predictedIndex,
+            # Fields only, no tags — tagging by any per-sample value would
+            # split every field into separate series and break Grafana plots.
+            self.mInfluxWriter.write_point('assist_model', {
+                'assist_prediction': assistPrediction,
+                'assist_prediction_physical': assistPredictionPhysical,
                 'inference_latency_milliseconds': latencyMilliseconds,
-            }
-            for name, prob in zip(self.mClassNames, probabilities):
-                fields[f'probability_{name}'] = float(prob)
-            self.mInfluxWriter.write_point('stroke_detector', fields)
+            })
 
     def run(self):
         """Child-process entry point. Builds logger/writer/session, then loops."""

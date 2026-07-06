@@ -120,7 +120,7 @@ def main():
     imuToMotorQueue = queue.Queue()
     imuRawToMlQueue = queue.Queue()
     oarRawToMlQueue = multiprocessing.Queue()
-    mlToMotorQueue = multiprocessing.Queue()  # Reserved for future stroke events to the motor
+    assistToMotorQueue = multiprocessing.Queue()  # Assist predictions from MlManager to MotorManager
 
     # Event object the parent uses to ask the ML child to shut down cleanly.
     mlShutdownEvent = multiprocessing.Event()
@@ -132,7 +132,7 @@ def main():
     imuManager = ImuManager(config['imuManager'], loggerImu, imuToMotorQueue, rawQueue=imuRawToMlQueue, influxWriter=influxWriter)
     motorManager = MotorManager(config['motorManager'], loggerMotor, rfToMotorQueue, motorToRfQueue,
                                 imuQueue=imuToMotorQueue, oarImuQueue=oarImuToMotorQueue,
-                                mlQueue=mlToMotorQueue, influxWriter=influxWriter)
+                                assistQueue=assistToMotorQueue, influxWriter=influxWriter)
     # MlManager runs in its own process. No logger object is passed — the child
     # builds its own FileHandler-backed logger from the log path + level.
     mlManager = MlManager(
@@ -143,7 +143,7 @@ def main():
         LOG_LEVEL_MAP[config['mlManager']['mlLoggerVerbosityLevel']],
         influxConfigPath,
         influxSession,
-        strokeOutQueue=mlToMotorQueue,
+        assistOutQueue=assistToMotorQueue,
     )
 
     def shutdownHandler(signum, frame):

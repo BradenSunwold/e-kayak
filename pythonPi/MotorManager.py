@@ -10,7 +10,6 @@ import pyvesc
 from pyvesc import GetValues, SetRPM, SetCurrent
 from gpiozero import AngularServo
 from gpiozero.pins.pigpio import PiGPIOFactory
-import FIR
 import RCFilter
 import PIDController
 
@@ -51,7 +50,7 @@ FAULT_CONFIG_KEY = {
 
 class MotorManager(threading.Thread):
     def __init__(self, configDictionary, logger, incomingQueue, outgoingQueue,
-                 imuQueue=None, oarImuQueue=None, mlQueue=None, influxWriter=None):
+                 imuQueue=None, oarImuQueue=None, assistQueue=None, influxWriter=None):
         super().__init__()
         self.mLogger = logger
         self.mInfluxWriter = influxWriter
@@ -64,15 +63,19 @@ class MotorManager(threading.Thread):
         self.mOutgoingQueue = outgoingQueue
         self.mImuQueue = imuQueue              # Kayak heading from ImuManager
         self.mOarImuQueue = oarImuQueue        # Oar pitch/roll/yaw from RfManager
-        self.mMlQueue = mlQueue                # Stroke probability from MlManager
+        self.mAssistQueue = assistQueue        # Assist prediction from MlManager
 
         # Variables coming from RF manager
         self.mMotorSpeedManual = 0
         self.mMode = MotorMode.TRAINING
         self.mPreviousMode = MotorMode.TRAINING
 
-        # Variables coming from ML model
-        self.mStrokeProbability = 0.0
+        # Variables coming from ML model. The assist prediction is the raw
+        # regression output in normalized label units: ~[-1, 1] for typical
+        # paddling (1.0 = 95th-percentile stroke intensity, negative =
+        # kayak decelerating). Clamped and mapped to RPM in WriteMotor.
+        self.mAssistPrediction = 0.0
+        self.mAutoTargetRpm = 0.0
 
         # Kayak IMU state
         self.mKayakHeading = 0.0
@@ -131,8 +134,8 @@ class MotorManager(threading.Thread):
         # Auto mode config and asymmetric RC filter
         autoConfig = self.mConfigurator.get('autoMode', {})
         self.mAutoDeadbandRpm = autoConfig.get('deadbandRpm', 100)
-        self.mAutoStrokeRpm = autoConfig.get('strokeRpm', 400)
-        self.mStrokeProbabilityThreshold = autoConfig.get('strokeProbabilityThreshold', 0.75)
+        self.mAutoAssistMaxRpm = autoConfig.get('assistMaxRpm', 200)
+        self.mAutoAssistGain = autoConfig.get('assistGain', 1.0)
         self.mAutoRampUpTau = autoConfig.get('rampUpTauInSeconds', 0.5)
         self.mAutoRampDownTau = autoConfig.get('rampDownTauInSeconds', 2.0)
         self.mAutoRpmFilter = RCFilter.RCFilter(self.mAutoRampDownTau, self.mMotorWriteInterval)
@@ -357,17 +360,17 @@ class MotorManager(threading.Thread):
         else:
             self.mLogger.debug("Command queue empty")
 
-        # Read stroke probability from ML module
-        if self.mMlQueue is not None:
+        # Read assist prediction from ML module
+        if self.mAssistQueue is not None:
             latestMl = None
             while True:
                 try:
-                    latestMl = self.mMlQueue.get_nowait()
+                    latestMl = self.mAssistQueue.get_nowait()
                 except queue.Empty:
                     break
             if latestMl is not None:
-                (self.mStrokeProbability,) = struct.unpack('f', latestMl)
-                self.mLogger.debug('Stroke probability: %.3f', self.mStrokeProbability)
+                (self.mAssistPrediction,) = struct.unpack('f', latestMl)
+                self.mLogger.debug('Assist prediction: %+.3f', self.mAssistPrediction)
 
         self.mNextCommandReadTime += self.mCommandReadInterval
         self.mScheduler.enterabs(self.mNextCommandReadTime, 1, self.ReadCommands)
@@ -396,18 +399,26 @@ class MotorManager(threading.Thread):
                 self.mAutoRpmFilter.Clear()
                 self.mLogger.info('Entered AUTO mode')
 
-            # Determine target RPM based on stroke detection
-            strokeDetected = self.mStrokeProbability >= self.mStrokeProbabilityThreshold
-            if strokeDetected:
-                autoTargetRpm = self.mAutoStrokeRpm
+            # Map the regression prediction to a target RPM. Gain is an
+            # on-water tuning knob; the clamp turns negative predictions
+            # (kayak decelerating) into zero assist and saturates monster
+            # strokes at full assist. Full assist adds assistMaxRpm on top
+            # of the deadband RPM that keeps the prop spinning.
+            assistCommand = max(0.0, min(1.0, self.mAssistPrediction * self.mAutoAssistGain))
+            self.mAutoTargetRpm = self.mAutoDeadbandRpm + (assistCommand * self.mAutoAssistMaxRpm)
+
+            # Asymmetric response: ramp-up tau when the target is above the
+            # current filter output, ramp-down tau when it is below. The
+            # ramp-down tau is the "sustain vs pulse" decay knob.
+            if self.mAutoTargetRpm > self.mAutoRpmFilter.LastOutput():
                 self.mAutoRpmFilter.SetTau(self.mAutoRampUpTau, self.mMotorWriteInterval)
             else:
-                autoTargetRpm = self.mAutoDeadbandRpm
                 self.mAutoRpmFilter.SetTau(self.mAutoRampDownTau, self.mMotorWriteInterval)
 
-            self.mRpm = self.mAutoRpmFilter.Feed(autoTargetRpm)
-            self.mLogger.debug('AUTO stroke=%.3f target=%d filtered_rpm=%.1f',
-                               self.mStrokeProbability, autoTargetRpm, self.mRpm)
+            self.mRpm = self.mAutoRpmFilter.Feed(self.mAutoTargetRpm)
+            self.mLogger.debug(
+                'AUTO assist_prediction=%+.3f assist_command=%.3f target=%.1f filtered_rpm=%.1f',
+                self.mAssistPrediction, assistCommand, self.mAutoTargetRpm, self.mRpm)
 
         # If we are in a startup, ignore all faults and commands - Force a reversal for X seconds
         if(self.mStartupLatched == True) :
@@ -435,6 +446,8 @@ class MotorManager(threading.Thread):
                 "speed_setting": self.mMotorSpeedManual,
                 "mode": int(self.mMode),
                 "max_rpms": float(self.mMaxRpms),
+                "assist_prediction": self.mAssistPrediction,
+                "auto_target_rpm": self.mAutoTargetRpm,
             })
 
         filteredRpm *= self.mMotorPolePairs

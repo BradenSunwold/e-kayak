@@ -1,26 +1,34 @@
 """
-Export the best trained StrokeCNN checkpoint to ONNX for Pi inference.
+Export a trained regression checkpoint (assist or turn) to ONNX for Pi inference.
 
 What this does:
-1. Loads checkpoints/best_model.pt
-2. Traces the model with a dummy input of shape (1, NUM_CHANNELS, WINDOW_SIZE)
-3. Writes checkpoints/best_model.onnx
-4. Writes checkpoints/best_model_meta.json — a sidecar that describes the model's
-   input shape, sample rate, and class labels so the Pi can load the model
-   without duplicating training-side constants
-5. Verifies the ONNX model produces the same output as the torch model (max abs diff)
+1. Loads checkpoints/{model}_best.pt
+2. Traces the model with a dummy input of shape (1, NUM_CHANNELS, window_size)
+3. Writes checkpoints/{model}_best.onnx
+4. Writes checkpoints/{model}_onnx_meta.json — a sidecar that describes the
+   model's input shape, sample rate, and label normalization scale so the Pi
+   can load the model without duplicating training-side constants
+5. Verifies the ONNX model produces the same output as the torch model
+   (max abs diff) across a batch of random inputs
 
 Usage:
-    python export_onnx.py
+    python export_onnx.py --model assist
+    python export_onnx.py --model turn
 
 Notes on the ONNX graph:
-- Input name:  "imu_window"  shape (batch, 6, 40)    dtype float32
-- Output name: "logits"      shape (batch, 2)        dtype float32
-  Run softmax on the Pi side to get class probabilities.
-- Batch dim is marked dynamic so the same graph works for single-sample inference
-  or batched evaluation.
+- Input name:  "imu_window"   shape (batch, 6, window_size)   dtype float32
+- Output name: "prediction"   shape (batch,)                  dtype float32
+  The output is the regression scalar directly — no softmax, no post-processing.
+  It is in *normalized label units*: multiply by label_norm_scale (from the
+  metadata sidecar) to recover physical units (m/s^2 forward accel for assist,
+  yaw rate for turn).
+- Batch dim is marked dynamic so the same graph works for single-sample
+  inference on the Pi or batched offline evaluation.
 """
 
+from __future__ import annotations
+
+import argparse
 import json
 
 import numpy as np
@@ -29,68 +37,105 @@ import torch
 from config import (
     CHANNEL_NAMES,
     CHECKPOINT_DIR,
-    LABEL_MAP,
+    MODEL_TYPE_ASSIST,
+    MODEL_TYPES,
     NUM_CHANNELS,
     SAMPLE_RATE_HZ,
-    WINDOW_SIZE,
-    WINDOW_STRIDE,
 )
-from model import StrokeCNN
+from model import build_model, input_window_size
 
 
-CHECKPOINT_PATH = CHECKPOINT_DIR / "best_model.pt"
-ONNX_PATH = CHECKPOINT_DIR / "best_model.onnx"
-META_PATH = CHECKPOINT_DIR / "best_model_meta.json"
+def _artifact_paths(model_type: str) -> dict:
+    """Everything export reads and writes for one model type."""
+    return {
+        "checkpoint": CHECKPOINT_DIR / f"{model_type}_best.pt",
+        "train_meta": CHECKPOINT_DIR / f"{model_type}_meta.json",
+        "onnx": CHECKPOINT_DIR / f"{model_type}_best.onnx",
+        "onnx_meta": CHECKPOINT_DIR / f"{model_type}_onnx_meta.json",
+    }
 
 
 def main():
-    if not CHECKPOINT_PATH.exists():
+    parser = argparse.ArgumentParser(
+        description="Export a trained regression model to ONNX.")
+    parser.add_argument("--model", choices=MODEL_TYPES, required=True,
+                        help="Which trained model to export ('assist' or 'turn').")
+    args = parser.parse_args()
+
+    paths = _artifact_paths(args.model)
+    if not paths["checkpoint"].exists():
         raise FileNotFoundError(
-            f"No checkpoint at {CHECKPOINT_PATH}. Train the model first with train.py."
+            f"No checkpoint at {paths['checkpoint']}. "
+            f"Train the model first: python train.py --model {args.model} --log-dirs <dirs>"
         )
 
     # Load on CPU — export is device-agnostic and CPU keeps the exported graph clean
     device = torch.device("cpu")
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=True)
+    checkpoint = torch.load(paths["checkpoint"], map_location=device, weights_only=True)
 
-    model = StrokeCNN().to(device)
+    model = build_model(args.model).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
-    print(f"Loaded checkpoint from epoch {checkpoint['epoch']} "
+    print(f"Loaded {args.model} checkpoint from epoch {checkpoint['epoch']} "
           f"(validation_loss={checkpoint['val_loss']:.4f}, "
-          f"validation_accuracy={checkpoint['val_acc']:.4f})")
+          f"validation_mae={checkpoint['val_mae']:.4f}, "
+          f"validation_r2={checkpoint['val_r2']:.4f})")
+
+    # Training metadata sidecar carries the LabelConfig this checkpoint was
+    # trained against — including the label normalization scale the Pi needs
+    # to convert predictions back to physical units.
+    label_config = None
+    if paths["train_meta"].exists():
+        with open(paths["train_meta"]) as f:
+            label_config = json.load(f).get("label_config")
+    if label_config is None:
+        raise FileNotFoundError(
+            f"Training metadata missing or has no label_config: {paths['train_meta']}. "
+            "Re-run train.py so the label normalization scale is recorded — the Pi "
+            "cannot interpret predictions without it."
+        )
+    norm_scale_key = ("assist_norm_scale" if args.model == MODEL_TYPE_ASSIST
+                      else "turn_norm_scale")
+    label_norm_scale = float(label_config[norm_scale_key])
+    print(f"Label normalization scale ({norm_scale_key}): {label_norm_scale}")
+
+    window_size = input_window_size(args.model)
 
     # Dummy input used to trace the graph. Content doesn't matter, only shape/dtype.
-    dummy_input = torch.randn(1, NUM_CHANNELS, WINDOW_SIZE, dtype=torch.float32)
+    dummy_input = torch.randn(1, NUM_CHANNELS, window_size, dtype=torch.float32)
 
     torch.onnx.export(
         model,
         dummy_input,
-        ONNX_PATH.as_posix(),
+        paths["onnx"].as_posix(),
         input_names=["imu_window"],
-        output_names=["logits"],
+        output_names=["prediction"],
         dynamic_axes={
             "imu_window": {0: "batch"},
-            "logits": {0: "batch"},
+            "prediction": {0: "batch"},
         },
         opset_version=18,
+        dynamo=False,   # legacy exporter → single self-contained .onnx file
     )
-    print(f"Exported ONNX model to {ONNX_PATH}")
+    print(f"Exported ONNX model to {paths['onnx']}")
 
-    # Parity check: run the same input through torch and onnxruntime, compare outputs
+    # Parity check: run the same inputs through torch and onnxruntime and
+    # compare. A batch > 1 also exercises the dynamic batch axis.
     import onnxruntime as ort
 
+    batch_input = torch.randn(8, NUM_CHANNELS, window_size, dtype=torch.float32)
     with torch.no_grad():
-        torch_out = model(dummy_input).cpu().numpy()
+        torch_out = model(batch_input).cpu().numpy()
 
-    session = ort.InferenceSession(ONNX_PATH.as_posix(), providers=["CPUExecutionProvider"])
-    (onnx_out,) = session.run(None, {"imu_window": dummy_input.numpy()})
+    session = ort.InferenceSession(paths["onnx"].as_posix(),
+                                   providers=["CPUExecutionProvider"])
+    (onnx_out,) = session.run(None, {"imu_window": batch_input.numpy()})
 
-    max_abs_diff = np.max(np.abs(torch_out - onnx_out))
-    print(f"torch output:  {torch_out.ravel()}")
-    print(f"onnx  output:  {onnx_out.ravel()}")
-    print(f"Max abs diff:  {max_abs_diff:.3e}")
+    max_abs_diff = float(np.max(np.abs(torch_out - onnx_out)))
+    print(f"torch predictions: {np.round(torch_out.ravel(), 4)}")
+    print(f"onnx  predictions: {np.round(onnx_out.ravel(), 4)}")
+    print(f"Max abs diff:      {max_abs_diff:.3e}")
 
     if max_abs_diff > 1e-4:
         raise RuntimeError(
@@ -99,28 +144,28 @@ def main():
         )
     print("Parity check PASSED.")
 
-    # Build class_names in index order so consumers can do class_names[predicted_index].
-    # LABEL_MAP is {name: index}; invert and sort by index.
-    class_names = [name for name, _ in sorted(LABEL_MAP.items(), key=lambda kv: kv[1])]
-
     # Sidecar metadata — Pi-side code reads this so training-only constants
-    # (window size, sample rate, class labels) don't get duplicated on the Pi.
+    # (window size, sample rate, label scaling) don't get duplicated on the Pi.
     metadata = {
+        "model_type": args.model,
         "input_name": "imu_window",
-        "output_name": "logits",
+        "output_name": "prediction",
         "num_channels": NUM_CHANNELS,
         "channel_names": CHANNEL_NAMES,
-        "window_size": WINDOW_SIZE,
-        "window_stride": WINDOW_STRIDE,
+        "window_size": window_size,
         "sample_rate_hz": SAMPLE_RATE_HZ,
-        "class_names": class_names,
+        # Multiply the model's output by this to get physical units
+        # (forward accel in m/s^2 for assist, yaw rate for turn).
+        "label_norm_scale": label_norm_scale,
+        "label_config": label_config,
         "checkpoint_epoch": int(checkpoint["epoch"]),
         "checkpoint_validation_loss": float(checkpoint["val_loss"]),
-        "checkpoint_validation_accuracy": float(checkpoint["val_acc"]),
+        "checkpoint_validation_mae": float(checkpoint["val_mae"]),
+        "checkpoint_validation_r2": float(checkpoint["val_r2"]),
     }
-    with open(META_PATH, "w") as f:
+    with open(paths["onnx_meta"], "w") as f:
         json.dump(metadata, f, indent=2)
-    print(f"Wrote model metadata sidecar to {META_PATH}")
+    print(f"Wrote model metadata sidecar to {paths['onnx_meta']}")
 
 
 if __name__ == "__main__":

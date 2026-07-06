@@ -116,7 +116,9 @@ def compute_trajectory(kayak_df: pd.DataFrame, config: TrajectoryConfig) -> pd.D
 
 
 def compute_ghost_trajectory_from_labels(labels_df: pd.DataFrame,
-                                         config: TrajectoryConfig) -> pd.DataFrame:
+                                         config: TrajectoryConfig,
+                                         assist_norm_scale: float = 1.0,
+                                         turn_norm_scale: float = 1.0) -> pd.DataFrame:
     """Drive a ghost trajectory from regression labels instead of raw kayak IMU.
 
     The labels are unit-matched substitutes for the kayak's forward accel
@@ -125,6 +127,12 @@ def compute_ghost_trajectory_from_labels(labels_df: pd.DataFrame,
     and real boats means their absolute drift cancels in the comparison —
     only the *difference* in their paths reflects label-vs-truth divergence.
 
+    Labels come out of compute_labels() divided by their normalization
+    scales (training wants roughly unit-scale targets), so the integrator
+    needs them multiplied back to physical units first — pass the same
+    scales the labels were computed with. Leaving the defaults at 1.0
+    means "labels are already physical."
+
     NaN labels at the end of the session (where the future window ran off
     the data) are filled with 0 so the cumulative integrators don't poison.
     The ghost just sits still in those samples — fine, it's session end.
@@ -132,11 +140,13 @@ def compute_ghost_trajectory_from_labels(labels_df: pd.DataFrame,
     if labels_df.empty:
         return pd.DataFrame(columns=["timestamp", "x", "y", "heading_rad", "velocity"])
 
-    # Rename label columns into the column names the integrator expects.
-    # Same units, same role — just a different upstream source.
+    # Rename label columns into the column names the integrator expects,
+    # de-normalizing back to physical units on the way.
     ghost_input_df = pd.DataFrame({
         "timestamp": labels_df["timestamp"],
-        config.forward_accel_column: labels_df["assist_label"].fillna(0.0),
-        config.yaw_rate_column: labels_df["turn_label"].fillna(0.0),
+        config.forward_accel_column:
+            labels_df["assist_label"].fillna(0.0) * assist_norm_scale,
+        config.yaw_rate_column:
+            labels_df["turn_label"].fillna(0.0) * turn_norm_scale,
     })
     return compute_trajectory(ghost_input_df, config)

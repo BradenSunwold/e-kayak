@@ -1,5 +1,5 @@
 session: "2026-07-04_13:18.40"
-log_dir: "/Users/bradensunwold/Documents/KayakLogs/7-4-26_Lake_Union/logs"
+log_dir: "/Users/bradensunwold/Documents/KayakLogs/7-4-26_Lake_Union/logs/Training_sessions"
 
 # Override any LabelConfig field here; the rest come from config.py defaults.
 # Only used when a panel below has source: labels. Omit the block entirely

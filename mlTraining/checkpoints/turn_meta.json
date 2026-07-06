@@ -1,0 +1,35 @@
+{
+  "model_type": "turn",
+  "input_window_size": 40,
+  "label_config": {
+    "assist_delay_ms": 100,
+    "turn_delay_ms": 200,
+    "assist_window_ms": 600,
+    "turn_window_ms": 2000,
+    "forward_accel_column": "accel_x",
+    "yaw_rate_column": "gyro_z",
+    "assist_norm_scale": 0.339,
+    "turn_norm_scale": 0.055
+  },
+  "split_info": {
+    "filter_training_mode_only": true,
+    "single_session_split": false,
+    "val_split": 0.2
+  },
+  "train_sessions": [
+    {
+      "log_dir": "/Users/bradensunwold/Documents/KayakLogs/7-4-26_Lake_Union/logs/Training_sessions",
+      "name": "2026-07-04_13:18.40"
+    },
+    {
+      "log_dir": "/Users/bradensunwold/Documents/KayakLogs/7-4-26_Lake_Union/logs/Training_sessions",
+      "name": "2026-07-04_15:08.17"
+    }
+  ],
+  "val_sessions": [
+    {
+      "log_dir": "/Users/bradensunwold/Documents/KayakLogs/7-4-26_Lake_Union/logs/Training_sessions",
+      "name": "2026-07-04_14:21.07"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "model_type": "assist",
+  "input_name": "imu_window",
+  "output_name": "prediction",
+  "num_channels": 6,
+  "channel_names": [
+    "accel_x",
+    "accel_y",
+    "accel_z",
+    "gyro_x",
+    "gyro_y",
+    "gyro_z"
+  ],
+  "window_size": 5,
+  "sample_rate_hz": 20,
+  "label_norm_scale": 0.339,
+  "label_config": {
+    "assist_delay_ms": 100,
+    "turn_delay_ms": 200,
+    "assist_window_ms": 600,
+    "turn_window_ms": 2000,
+    "forward_accel_column": "accel_x",
+    "yaw_rate_column": "gyro_z",
+    "assist_norm_scale": 0.339,
+    "turn_norm_scale": 0.055
+  },
+  "checkpoint_epoch": 34,
+  "checkpoint_validation_loss": 0.043865978992395374,
+  "checkpoint_validation_mae": 0.24691136181354523,
+  "checkpoint_validation_r2": -0.1693415765149875
+}

@@ -337,21 +337,29 @@ class MotorManager(threading.Thread):
         # packets faster than ReadCommands runs, so the queue grows over time
         # if we only read one message per call.
         latestCommand = None
+        sawFreshPayload = False
         while True:
             try:
                 latestCommand = self.mIncomingQueue.get_nowait()
+                _, _, tmpFresh = struct.unpack('BBB', latestCommand)
+                if tmpFresh:
+                    sawFreshPayload = True
             except queue.Empty:
                 break
 
         if latestCommand is not None:
-            tmpMode, tmpRpm = struct.unpack('BB', latestCommand)
+            tmpMode, tmpRpm, _ = struct.unpack('BBB', latestCommand)
 
             numberSpeeds = self.mConfigurator['numberOfSpeedSettings']
 
             if(tmpRpm < numberSpeeds) :
                 self.mMode = MotorMode(tmpMode)
                 self.mMotorSpeedManual = tmpRpm
-                self.mLastOarMessageTime = time.time()
+                # Only fresh payloads pet the oar comms-loss watchdog — a
+                # wedged oar repeating identical data is treated the same as
+                # a silent radio and trips the same COMS_LOSS fault
+                if sawFreshPayload:
+                    self.mLastOarMessageTime = time.time()
 
                 self.mLogger.debug('Oar Mode Command: %s', self.mMode.name)
                 self.mLogger.debug('Oar Speed Command: %s', self.mMotorSpeedManual)

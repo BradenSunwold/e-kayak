@@ -33,7 +33,7 @@ motorManager:
 
   faultClearTimeoutInMilliseconds: 2000   # How long does fault have to be cleared to unlatch
   vescComsLossTimeoutInMilliseconds: 2000  # Fault if no VESC response for this long
-  oarComsLossTimeoutInMilliseconds: 2000   # Fault if no oar command received for this long
+  oarComsLossTimeoutInMilliseconds: 2000   # Fault if no fresh oar data for this long (silent radio or frozen payload)
   maxRpmReduction: 250                     # Max total RPM reduction from over-current recoveries before latching
   faultConfig:
     overTemp:

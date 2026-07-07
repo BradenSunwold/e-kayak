@@ -775,9 +775,15 @@ static void ProcessOutputsTask( void *pvParameters )
         localMode = (MotorMode_t)paddleCmdMsg.fMode;
         speedPercentageCommanded = paddleCmdMsg.fSpeed;
 
+        // Always keep the RF TX struct in sync with the current state, even during
+        // comms loss or faults. RfRadioTask transmits continuously, so withholding
+        // this update leaves stale mode/speed on the air — including the coms-timeout
+        // latch to speed 0 / training, which must reach the kayak to actually stop it.
+        xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
+
         if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
         {
-          // Only report to LED driver / RF output if we arn't currently faulted or trying to re-connect
+          // Only report to LED driver if we arn't currently faulted or trying to re-connect
           ledMsg =
           {
             .fFrameGenerator = PulseFrameGeneratorBlue,
@@ -798,8 +804,6 @@ static void ProcessOutputsTask( void *pvParameters )
             .fNumFrames = LED_COUNT
           };
           xQueueSend(ledPixelMapQueue, (void *)&ledMsg, 1);
-
-          xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
         }
 
       }
@@ -808,11 +812,8 @@ static void ProcessOutputsTask( void *pvParameters )
         localMode = (MotorMode_t)paddleCmdMsg.fMode;
         speedPercentageCommanded = paddleCmdMsg.fSpeed;
 
-        if(!connectingFlag && !gMotorFaultFlag && !gComsTimeoutFlag)
-        {
-          // Only report to RF output if we arn't currently faulted or trying to re-connect
-          xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
-        }
+        // Always forward to RF output — see comment in the mode-change branch above
+        xQueueSend(rfOutMsgQueue, (void *)&paddleCmdMsg, 1);
       }
     }
 
@@ -1342,7 +1343,7 @@ void setup()
   radio.begin();
   radio.openReadingPipe(1, address[1]);
   radio.openWritingPipe(address[0]); 
-  radio.setPALevel(RF24_PA_LOW);
+  radio.setPALevel(RF24_PA_MAX);     // PA_LOW dropped out in bursts on-water (paddle shadowing) — max link budget
   radio.setDataRate(RF24_2MBPS);      // default - RF24_1MBPS
   radio.setRetries(3, 7);             // Need to test with Rx and Tx running on motor and oar
   radio.enableDynamicPayloads();

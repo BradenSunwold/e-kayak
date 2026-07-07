@@ -3,7 +3,7 @@ import struct
 import sched
 import threading
 import queue
-from pyrf24 import RF24, RF24_PA_LOW, RF24_2MBPS
+from pyrf24 import RF24, RF24_PA_MAX, RF24_2MBPS
 from EventTimer import EventTimer
 from KayakDefines import MotorMode
 
@@ -35,6 +35,17 @@ class RfManager(threading.Thread):
         self.mRxDropLogInterval = 100  # Log every N received packets
         self.mRxDropThresholdHz = 17.0
 
+        # Stale-data watchdog: a wedged oar can keep transmitting at full rate
+        # with frozen payload contents (message index still increments, so rate
+        # stats look healthy). Each heartbeat to MotorManager carries a
+        # payload-fresh flag; MotorManager only counts fresh payloads toward
+        # its oar comms-loss timeout, so frozen data trips the same fault on
+        # the same clock as a silent radio.
+        self.mPrevPayload = None
+        self.mStaleRepeatCount = 0
+        self.mStaleWarnStreak = 20  # ~1 s at 20 Hz — warn once a freeze streak reaches this
+        self.mStaleWarned = False   # Ensures one warning per freeze event, not per packet
+
         # IMU member vars
         self.mCurrentMsgNum = 0
         self.mCurrentRoll = 0
@@ -64,7 +75,7 @@ class RfManager(threading.Thread):
         if not self.mRadio.begin():
             raise OSError("nRF24L01 hardware isn't responding")
 
-        self.mRadio.set_pa_level(RF24_PA_LOW)  # RF24_PA_LOW tested in box at 15 feet
+        self.mRadio.set_pa_level(RF24_PA_MAX)  # PA_LOW dropped out in bursts on-water (paddle shadowing) — max link budget
         self.mRadio.open_tx_pipe(self.mAddress[self.mRadioNumber])
         self.mRadio.open_rx_pipe(1, self.mAddress[not self.mRadioNumber])
         self.mRadio.setRetries(3, 7)
@@ -136,6 +147,8 @@ class RfManager(threading.Thread):
 
                 if length == manualSize:
                     self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw = struct.unpack(self.mRfReceiveFormatManual, received)
+                    payloadTuple = (self.mCurrentMotorMode, self.mCurrentMotorSpeed,
+                                    self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw)
 
                     self.mLogger.debug('Manual mode packet')
                     self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
@@ -152,6 +165,10 @@ class RfManager(threading.Thread):
                         }, tags={"mode": "manual"})
                 elif length == autoSize:
                     self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveFormatAuto, received)
+                    payloadTuple = (self.mCurrentMotorMode, self.mCurrentMotorSpeed,
+                                    self.mCurrentAccelX, self.mCurrentGyroX,
+                                    self.mCurrentAccelY, self.mCurrentGyroY,
+                                    self.mCurrentAccelZ, self.mCurrentGyroZ)
 
                     self.mLogger.debug('Auto mode packet')
                     self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
@@ -177,8 +194,30 @@ class RfManager(threading.Thread):
                     self.mLogger.error('RfReceive unexpected packet length: %d bytes', length)
                     raise ValueError('unexpected packet length: %d' % length)
 
-                # Always forward motor commands to MotorManager as heartbeat
-                motorModeCommand = struct.pack("BB", self.mCurrentMotorMode, self.mCurrentMotorSpeed)
+                # Freshness check compares everything except the message index —
+                # a wedged oar keeps incrementing the index, so it can't be
+                # trusted as a liveness signal. Logs only on freeze / recovery
+                # transitions, never per packet.
+                payloadFresh = payloadTuple != self.mPrevPayload
+                self.mPrevPayload = payloadTuple
+                if payloadFresh:
+                    if self.mStaleWarned:
+                        self.mLogger.warning('Oar payload updating again after %d frozen packets', self.mStaleRepeatCount)
+                    self.mStaleRepeatCount = 0
+                    self.mStaleWarned = False
+                else:
+                    self.mStaleRepeatCount += 1
+                    if not self.mStaleWarned and self.mStaleRepeatCount >= self.mStaleWarnStreak:
+                        self.mLogger.warning(
+                            'Oar payload frozen for %d consecutive packets — '
+                            'oar comms loss fault will trip if this persists',
+                            self.mStaleRepeatCount)
+                        self.mStaleWarned = True
+
+                # Always forward motor commands to MotorManager as heartbeat;
+                # the fresh flag tells MotorManager whether this packet counts
+                # toward its oar comms-loss watchdog
+                motorModeCommand = struct.pack("BBB", self.mCurrentMotorMode, self.mCurrentMotorSpeed, 1 if payloadFresh else 0)
                 self.mOutgoingQueue.put(motorModeCommand)
 
                 # Forward oar IMU data to motor thread for fin control (manual mode has roll/pitch/yaw)

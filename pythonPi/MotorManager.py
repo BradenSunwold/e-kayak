@@ -355,9 +355,10 @@ class MotorManager(threading.Thread):
             if(tmpRpm < numberSpeeds) :
                 self.mMode = MotorMode(tmpMode)
                 self.mMotorSpeedManual = tmpRpm
-                # Only fresh payloads pet the oar comms-loss watchdog — a
-                # wedged oar repeating identical data is treated the same as
-                # a silent radio and trips the same COMS_LOSS fault
+                # Only packets with a fresh message index pet the oar
+                # comms-loss watchdog — a wedged oar repeating the same packet
+                # is treated the same as a silent radio and trips the same
+                # COMS_LOSS fault
                 if sawFreshPayload:
                     self.mLastOarMessageTime = time.time()
 
@@ -433,7 +434,11 @@ class MotorManager(threading.Thread):
             self.mRpm = (self.mSpeedSettingToRpmMap[1] / 100) * self.mMaxRpms * -1
             if(time.time() - self.mStartupTime > (self.mStartupReversalTimeout / 1000)) :
                 self.mStartupLatched = False
+                # Reset both comms watchdogs — the reversal ignores incoming
+                # messages, so stale timestamps here would re-trip a fault the
+                # instant the reversal ends
                 self.mLastVescResponseTime = time.time()
+                self.mLastOarMessageTime = time.time()
                 self.mLogger.info('Exiting Startup Reversal')
 
         # Send RPM command to the motor

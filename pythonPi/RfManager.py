@@ -35,13 +35,17 @@ class RfManager(threading.Thread):
         self.mRxDropLogInterval = 100  # Log every N received packets
         self.mRxDropThresholdHz = 17.0
 
-        # Stale-data watchdog: a wedged oar can keep transmitting at full rate
-        # with frozen payload contents (message index still increments, so rate
-        # stats look healthy). Each heartbeat to MotorManager carries a
-        # payload-fresh flag; MotorManager only counts fresh payloads toward
-        # its oar comms-loss timeout, so frozen data trips the same fault on
-        # the same clock as a silent radio.
-        self.mPrevPayload = None
+        # Stale-data watchdog: freshness is judged on the message index
+        # advancing, NOT on payload contents. A motionless oar legitimately
+        # repeats bit-identical IMU values for seconds at a time (the
+        # ARVR-stabilized rotation vector quantizes and locks when still), so
+        # comparing contents false-trips the oar comms-loss fault. A repeated
+        # index, by contrast, means a wedged TX loop or an nRF24 duplicate
+        # delivery. Each heartbeat to MotorManager carries an index-fresh
+        # flag; MotorManager only counts fresh packets toward its oar
+        # comms-loss timeout, so a frozen index trips the same fault on the
+        # same clock as a silent radio.
+        self.mPrevMsgNum = None
         self.mStaleRepeatCount = 0
         self.mStaleWarnStreak = 20  # ~1 s at 20 Hz — warn once a freeze streak reaches this
         self.mStaleWarned = False   # Ensures one warning per freeze event, not per packet
@@ -147,8 +151,6 @@ class RfManager(threading.Thread):
 
                 if length == manualSize:
                     self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw = struct.unpack(self.mRfReceiveFormatManual, received)
-                    payloadTuple = (self.mCurrentMotorMode, self.mCurrentMotorSpeed,
-                                    self.mCurrentRoll, self.mCurrentPitch, self.mCurrentYaw)
 
                     self.mLogger.debug('Manual mode packet')
                     self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
@@ -165,10 +167,6 @@ class RfManager(threading.Thread):
                         }, tags={"mode": "manual"})
                 elif length == autoSize:
                     self.mCurrentMsgNum, self.mCurrentMotorMode, self.mCurrentMotorSpeed, self.mCurrentAccelX, self.mCurrentGyroX, self.mCurrentAccelY, self.mCurrentGyroY, self.mCurrentAccelZ, self.mCurrentGyroZ = struct.unpack(self.mRfReceiveFormatAuto, received)
-                    payloadTuple = (self.mCurrentMotorMode, self.mCurrentMotorSpeed,
-                                    self.mCurrentAccelX, self.mCurrentGyroX,
-                                    self.mCurrentAccelY, self.mCurrentGyroY,
-                                    self.mCurrentAccelZ, self.mCurrentGyroZ)
 
                     self.mLogger.debug('Auto mode packet')
                     self.mLogger.debug('Speed: %s', self.mCurrentMotorSpeed)
@@ -194,22 +192,24 @@ class RfManager(threading.Thread):
                     self.mLogger.error('RfReceive unexpected packet length: %d bytes', length)
                     raise ValueError('unexpected packet length: %d' % length)
 
-                # Freshness check compares everything except the message index —
-                # a wedged oar keeps incrementing the index, so it can't be
-                # trusted as a liveness signal. Logs only on freeze / recovery
-                # transitions, never per packet.
-                payloadFresh = payloadTuple != self.mPrevPayload
-                self.mPrevPayload = payloadTuple
+                # Freshness = the message index advanced since the last packet.
+                # The oar only transmits when it has dequeued a new IMU report,
+                # so a repeated index means a duplicate delivery or a wedged TX
+                # loop — never a still oar. The uint8 wrap (255 -> 0) counts as
+                # a change. Logs only on freeze / recovery transitions, never
+                # per packet.
+                payloadFresh = self.mCurrentMsgNum != self.mPrevMsgNum
+                self.mPrevMsgNum = self.mCurrentMsgNum
                 if payloadFresh:
                     if self.mStaleWarned:
-                        self.mLogger.warning('Oar payload updating again after %d frozen packets', self.mStaleRepeatCount)
+                        self.mLogger.warning('Oar message index advancing again after %d repeated packets', self.mStaleRepeatCount)
                     self.mStaleRepeatCount = 0
                     self.mStaleWarned = False
                 else:
                     self.mStaleRepeatCount += 1
                     if not self.mStaleWarned and self.mStaleRepeatCount >= self.mStaleWarnStreak:
                         self.mLogger.warning(
-                            'Oar payload frozen for %d consecutive packets — '
+                            'Oar message index frozen for %d consecutive packets — '
                             'oar comms loss fault will trip if this persists',
                             self.mStaleRepeatCount)
                         self.mStaleWarned = True

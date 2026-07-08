@@ -1021,7 +1021,7 @@ static void RfRadioTask( void *pvParameters )
 
   // Vars to track coms timeout to motor
   volatile TickType_t lastReceivedMsgTimeInTicks = xTaskGetTickCount();
-  double comsDroppedTimeInMs = 3000.0;     // If lose signal for 3 seconds, signal re connecting annimation
+  double comsDroppedTimeInMs = 3500.0;     // If lose signal for 3.5 seconds, signal re connecting annimation
   bool firstMessageReceived = false;
 
   uint8_t rxDownSample = 2;   // Only try to read radio every x iterations

@@ -26,7 +26,7 @@ motorManager:
     - 0.0
     - 60.0
     - 80.0
-    - 95.0
+    - 96.0
   underVoltage: 20
   batteryCalibrationOffset: .8    # VESC battery monitor ~.7 - .8V off from measured battery voltage
   maxTemp: 53

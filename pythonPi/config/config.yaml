@@ -21,12 +21,12 @@ motorManager:
   #   - SpeedThree: 90.0
   vescEnableGpioPin: 18
   motorPolePairs: 6
-  maxRpms: 500 # 2145 corresponds to about 65% duty cycle and 12A current draw - 500 for testing
+  maxRpms: 2145 # 2145 corresponds to about 65% duty cycle and 12A current draw - 500 for testing
   speedSettingToRpmMapInPercent: # Number of elements here has to match numberOfSpeedSettings
     - 0.0
     - 60.0
     - 80.0
-    - 96.0
+    - 97.0
   underVoltage: 20
   batteryCalibrationOffset: .8    # VESC battery monitor ~.7 - .8V off from measured battery voltage
   maxTemp: 53
@@ -50,8 +50,8 @@ motorManager:
       latching: true
   rpmFilterTauInSeconds: 1.3       # RC filter time constant for RPM rate limiter (manual mode)
   autoMode:
-    deadbandRpm: 300                # 750 RPM held between strokes (keeps motor spinning)
-    assistMaxRpm: 500               # 1395 RPM added on top of deadband at full assist (clamped prediction = 1.0)
+    deadbandRpm: 750                # 750 RPM held between strokes (keeps motor spinning) - 300 for testing
+    assistMaxRpm: 1300              # 1395 RPM added on top of deadband at full assist (clamped prediction = 1.0) - 200 for testing
     assistGain: 1.0                 # Tuning gain on the assist prediction before clamping to [0, 1]
     rampUpTauInSeconds: 0.4          # RC filter tau when target RPM is rising
     rampDownTauInSeconds: 0.4        # RC filter tau when target RPM is falling ("sustain vs pulse" decay knob)
@@ -63,8 +63,8 @@ motorManager:
     servoGpioPin: 12
     finFilterTauInSeconds: 0.3    # RC filter time constant for smoothing fin angle commands
     headingPid:
-      kP: 1.1
-      kI: 0.4
+      kP: 1.4
+      kI: 0.65
       kD: 0.1
       integralLimit: 12.0
       outputMinDeg: -25.0

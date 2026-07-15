@@ -41,8 +41,8 @@ LABEL_TURN_WINDOW_MS = 2000      # longer integration window for smoother turn t
 
 # Divisors that bring labels into roughly unit scale before training.
 # Start at 1.0; once you have data, replace with ~95th percentile of |label|.
-LABEL_ASSIST_NORM_SCALE = 0.339     # 1.0
-LABEL_TURN_NORM_SCALE = 0.055       # 1.0
+LABEL_ASSIST_NORM_SCALE = 0.389     # recomputed 7-11-26 over Ongoing_Training_Sessions (6 sessions, 64306 samples)
+LABEL_TURN_NORM_SCALE = 0.126       # recomputed 7-11-26 (new sessions have far more turning than 7-4 corpus)
 
 # ── Paddle input windows (per-model) ──────────────────────────────────────
 # Each model gets a fixed window of paddle IMU history at every prediction.

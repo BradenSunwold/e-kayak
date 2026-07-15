@@ -41,8 +41,8 @@ LABEL_TURN_WINDOW_MS = 2000      # longer integration window for smoother turn t
 
 # Divisors that bring labels into roughly unit scale before training.
 # Start at 1.0; once you have data, replace with ~95th percentile of |label|.
-LABEL_ASSIST_NORM_SCALE = 0.389     # recomputed 7-11-26 over Ongoing_Training_Sessions (6 sessions, 64306 samples)
-LABEL_TURN_NORM_SCALE = 0.126       # recomputed 7-11-26 (new sessions have far more turning than 7-4 corpus)
+LABEL_ASSIST_NORM_SCALE = 0.394     # recomputed 7-14-26, idle-gated, over Ongoing_Training_Sessions (6 sessions, 61034 samples)
+LABEL_TURN_NORM_SCALE = 0.128       # recomputed 7-14-26, idle-gated (new sessions have far more turning than 7-4 corpus)
 
 # ── Paddle input windows (per-model) ──────────────────────────────────────
 # Each model gets a fixed window of paddle IMU history at every prediction.
@@ -55,6 +55,29 @@ LABEL_TURN_NORM_SCALE = 0.126       # recomputed 7-11-26 (new sessions have far 
 # packet). The 75% stride from Phase 1 is obsolete here.
 WINDOW_SIZE_ASSIST = 5   # 250 ms at 20 Hz
 WINDOW_SIZE_TURN = 40    # 2 s at 20 Hz
+
+# ── Paddle idle gate ──────────────────────────────────────────────────────
+# Detects "not paddling" from paddle IMU motion energy: the rolling standard
+# deviation of gyro magnitude sqrt(gx²+gy²+gz²) over a trailing window. Gyro
+# (not accel) because a resting paddle reads ~0 on gyros regardless of
+# orientation, while accelerometers always see gravity.
+#
+# Used in two places that MUST share behavior (these constants are the single
+# source of truth; export_onnx.py copies them into the ONNX metadata sidecar
+# so the Pi runtime gate reads the same values):
+#   1. Training: dataset.py drops paddle-idle samples — their labels are wind
+#      drift / coast-down the paddle input cannot explain.
+#   2. Runtime (Pi): MlManager gates assist to zero while paddle-idle.
+#
+# Hysteresis: enter idle when energy drops below ENTER, exit as soon as it
+# rises above EXIT. The band between them holds the previous state so the
+# gate doesn't chatter at the boundary. Session data (7-11-26) shows idle
+# energy < 0.2 and active paddling at 0.7-1.4, so the thresholds sit in a
+# roughly order-of-magnitude gap. An incomplete window (startup) counts as
+# idle — the safe state: no assist until paddling is confirmed.
+IDLE_GATE_WINDOW_S = 3.0
+IDLE_GATE_ENTER_THRESHOLD = 0.2
+IDLE_GATE_EXIT_THRESHOLD = 0.4
 
 # Model identifiers. Used as the string passed to build_model() and as the
 # key for selecting which label column a SessionDataset returns.

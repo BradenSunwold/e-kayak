@@ -37,6 +37,9 @@ import torch
 from config import (
     CHANNEL_NAMES,
     CHECKPOINT_DIR,
+    IDLE_GATE_ENTER_THRESHOLD,
+    IDLE_GATE_EXIT_THRESHOLD,
+    IDLE_GATE_WINDOW_S,
     MODEL_TYPE_ASSIST,
     MODEL_TYPES,
     NUM_CHANNELS,
@@ -158,6 +161,16 @@ def main():
         # (forward accel in m/s^2 for assist, yaw rate for turn).
         "label_norm_scale": label_norm_scale,
         "label_config": label_config,
+        # Paddle idle gate the Pi runtime must mirror: training drops
+        # paddle-idle samples, so the model never sees an idle paddle —
+        # the Pi must gate assist to zero in that state rather than ask
+        # the model. Reference implementation: idle_gate.py.
+        "idle_gate": {
+            "signal": "rolling_std_of_gyro_magnitude",
+            "window_seconds": IDLE_GATE_WINDOW_S,
+            "enter_threshold": IDLE_GATE_ENTER_THRESHOLD,
+            "exit_threshold": IDLE_GATE_EXIT_THRESHOLD,
+        },
         "checkpoint_epoch": int(checkpoint["epoch"]),
         "checkpoint_validation_loss": float(checkpoint["val_loss"]),
         "checkpoint_validation_mae": float(checkpoint["val_mae"]),

@@ -114,6 +114,32 @@ class MlManager(multiprocessing.Process):
             self.mMeta['checkpoint_validation_loss'],
             self.mMeta['checkpoint_validation_mae'])
 
+        # Paddle idle gate parameters. Training drops paddle-idle samples, so
+        # the model has never seen a still paddle — instead of asking it, we
+        # flag those samples idle and MotorManager takes the assist to zero.
+        # The gate config rides in the metadata sidecar so the thresholds
+        # stay in lockstep with the training pipeline (single source of
+        # truth: mlTraining/config.py, reference implementation
+        # mlTraining/idle_gate.py — this streaming version must match it
+        # sample-for-sample).
+        idleGate = self.mMeta.get('idle_gate')
+        if idleGate is None:
+            self.mIdleGateEnabled = False
+            self.mLogger.warning(
+                'Metadata has no idle_gate block (model exported before the '
+                'gate existed) — idle gate DISABLED, all samples treated as '
+                'active paddling.')
+        else:
+            self.mIdleGateEnabled = True
+            self.mIdleGateWindowSamples = int(round(
+                idleGate['window_seconds'] * self.mMeta['sample_rate_hz']))
+            self.mIdleGateEnterThreshold = idleGate['enter_threshold']
+            self.mIdleGateExitThreshold = idleGate['exit_threshold']
+            self.mLogger.info(
+                '  idle gate: window=%d samples, enter<%.3f, exit>%.3f',
+                self.mIdleGateWindowSamples,
+                self.mIdleGateEnterThreshold, self.mIdleGateExitThreshold)
+
         # Per-channel mean / standard deviation computed from the training set.
         # Same preprocessing the model saw during training must be applied here.
         with open(normStatsPath) as f:
@@ -136,10 +162,48 @@ class MlManager(multiprocessing.Process):
         )
         self.mLogger.info('Loaded ONNX model from %s', modelPath.name)
 
+    def _updateIdleGate(self, gx, gy, gz):
+        """Feed one gyro sample into the idle-gate state machine.
+
+        Mirrors mlTraining/idle_gate.py exactly: energy is the standard
+        deviation (ddof=1, matching pandas' rolling .std() used in training)
+        of gyro magnitude over the trailing window; hysteresis enters idle
+        below the enter threshold, exits above the exit threshold, holds
+        state in between. An unfilled window counts as idle — the safe
+        startup state (no assist until paddling is confirmed).
+        """
+        if not self.mIdleGateEnabled:
+            return
+
+        magnitude = float(np.sqrt(gx * gx + gy * gy + gz * gz))
+        self.mGyroMagnitudeBuffer[:-1] = self.mGyroMagnitudeBuffer[1:]
+        self.mGyroMagnitudeBuffer[-1] = magnitude
+        # Count THIS sample before the warm check: the window is full (and
+        # energy computable) on the very sample that fills it — one sample
+        # earlier than a check-then-increment would allow. Matches the
+        # min_periods behavior of the pandas rolling std in idle_gate.py.
+        self.mGyroMagnitudeFillCount = min(self.mGyroMagnitudeFillCount + 1,
+                                           self.mIdleGateWindowSamples)
+        if self.mGyroMagnitudeFillCount < self.mIdleGateWindowSamples:
+            self.mPaddleIdle = True
+            return
+
+        self.mPaddleMotionEnergy = float(np.std(self.mGyroMagnitudeBuffer, ddof=1))
+        if self.mPaddleIdle and self.mPaddleMotionEnergy > self.mIdleGateExitThreshold:
+            self.mPaddleIdle = False
+            self.mLogger.info('Idle gate OPEN (paddling detected, '
+                              'motion_energy=%.3f)', self.mPaddleMotionEnergy)
+        elif not self.mPaddleIdle and self.mPaddleMotionEnergy < self.mIdleGateEnterThreshold:
+            self.mPaddleIdle = True
+            self.mLogger.info('Idle gate CLOSED (paddle idle, '
+                              'motion_energy=%.3f)', self.mPaddleMotionEnergy)
+
     def _ingestSample(self, payload):
         """Unpack one 6-float sample, push into the rolling buffer, run inference."""
         ax, ay, az, gx, gy, gz = struct.unpack('ffffff', payload)
         sample = np.array([ax, ay, az, gx, gy, gz], dtype=np.float32)
+
+        self._updateIdleGate(gx, gy, gz)
 
         # Shift the buffer one sample to the left (dropping the oldest column)
         # and write the new sample into the rightmost column. Done in place to
@@ -185,17 +249,25 @@ class MlManager(multiprocessing.Process):
                 'Prediction: assist=%+.3f inference_latency=%.2fms',
                 assistPrediction, latencyMilliseconds)
 
-        # Send the raw prediction to the motor manager for auto-mode RPM control
+        # Send prediction + idle flag to the motor manager. The prediction is
+        # always the true model output (logs and Influx stay honest); the
+        # motor side is responsible for taking assist to zero while idle —
+        # a still paddle is a state the model never trained on, so its
+        # output there is meaningless.
         if self.mAssistOutQueue is not None:
-            self.mAssistOutQueue.put(struct.pack('f', assistPrediction))
+            self.mAssistOutQueue.put(struct.pack('f?', assistPrediction, self.mPaddleIdle))
 
         if self.mInfluxWriter:
             # Fields only, no tags — tagging by any per-sample value would
             # split every field into separate series and break Grafana plots.
+            # paddle_idle as int and the raw motion energy make threshold
+            # tuning possible from a Grafana pane after an on-water session.
             self.mInfluxWriter.write_point('assist_model', {
                 'assist_prediction': assistPrediction,
                 'assist_prediction_physical': assistPredictionPhysical,
                 'inference_latency_milliseconds': latencyMilliseconds,
+                'paddle_idle': int(self.mPaddleIdle),
+                'paddle_motion_energy': self.mPaddleMotionEnergy,
             })
 
     def run(self):
@@ -215,6 +287,19 @@ class MlManager(multiprocessing.Process):
         # Seeded to zeros; we report "warming up" until it has been fully filled.
         self.mBuffer = np.zeros((self.mNumChannels, self.mWindowSize), dtype=np.float32)
         self.mBufferFillCount = 0
+
+        # Idle-gate state. Starts idle (gate closed) so the boat gives no
+        # assist until paddling is positively detected — mirrors the
+        # incomplete-window-is-idle rule in mlTraining/idle_gate.py.
+        self.mPaddleIdle = True
+        self.mPaddleMotionEnergy = 0.0
+        if self.mIdleGateEnabled:
+            self.mGyroMagnitudeBuffer = np.zeros(self.mIdleGateWindowSamples,
+                                                 dtype=np.float64)
+            self.mGyroMagnitudeFillCount = 0
+        else:
+            # Gate disabled (old metadata): never report idle, behave as before.
+            self.mPaddleIdle = False
 
         # Inference rate is tied to incoming sample rate (~20 Hz). To keep the
         # log from getting spammy, only emit INFO predictions every N samples;

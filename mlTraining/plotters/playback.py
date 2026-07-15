@@ -43,6 +43,7 @@ from matplotlib.patches import FancyArrow
 from matplotlib.widgets import Button, Slider
 
 from config import CHANNEL_NAMES, CHECKPOINT_DIR
+from idle_gate import GYRO_COLUMNS, compute_idle_mask
 from plotters import parsers
 from plotters.labels import LabelConfig, compute_labels
 from plotters.sim_trajectory import (
@@ -140,7 +141,9 @@ def _predict_model_series(model_type, paddle_df):
     This is the offline, batched twin of what MlManager does sample-by-sample
     on the Pi: slide a window over the paddle stream, z-score normalize each
     window with the training-time channel statistics, predict at every sample
-    (stride 1).
+    (stride 1), and zero predictions where the paddle idle gate is closed —
+    the deployed system forces assist to zero there (the model never trained
+    on a still paddle), so the ghost must see the same gated output.
 
     Returns a DataFrame with columns:
       timestamp             — paddle sample time the window ends at
@@ -200,6 +203,11 @@ def _predict_model_series(model_type, paddle_df):
         # Window k covers samples [k .. k + window_size - 1], so its
         # prediction belongs to the sample it ends at.
         predictions[start + window_size - 1:end + window_size - 1] = out
+
+    # Runtime idle gate, applied offline. Same reference implementation the
+    # Pi's streaming gate is parity-tested against, so ghost and boat make
+    # the identical gate decision at every sample.
+    predictions[compute_idle_mask(clean[GYRO_COLUMNS].to_numpy(dtype=float))] = 0.0
 
     return pd.DataFrame({
         "timestamp": clean["timestamp"],

@@ -7,6 +7,11 @@ not already-normalized values), and aggregates absolute label values across
 the entire corpus. Reports the 95th percentile of |assist_label| and
 |turn_label| — the values to paste into config.py as the divisors.
 
+Labels are idle-gated before the percentile: samples where the paddle was
+idle (see config.py "Paddle idle gate") are excluded, matching the filtering
+dataset.py applies during training. Sessions without an rfLog fall back to
+using all samples, with a note in the per-session output line.
+
 Why the 95th percentile and not max:
   Max is dominated by single outliers (one wave-funny stroke spikes the
   divisor and crams all normal labels into a sliver of the [-1, 1] range).
@@ -28,9 +33,12 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
+from dataset import _ALIGNMENT_TOLERANCE
+from idle_gate import GYRO_COLUMNS, compute_idle_mask
 from plotters.labels import LabelConfig, compute_labels
-from plotters.parsers import parse_imu_log
+from plotters.parsers import parse_imu_log, parse_rf_log
 
 
 def find_sessions(log_dir: Path) -> list[str]:
@@ -80,6 +88,33 @@ def main():
                 continue
 
             labels_df = compute_labels(kayak_df, cfg)
+            labels_df = labels_df.sort_values("timestamp").reset_index(drop=True)
+
+            # Idle-gate the labels the same way dataset.py gates training
+            # samples, so the percentiles describe the distribution the
+            # model actually trains on. Kayak samples with no paddle match
+            # within the alignment tolerance drop too — they never reach
+            # training either.
+            gate_note = "no rf log, idle gate skipped"
+            rf_path = log_dir / f"rfLog_{session}.log"
+            if rf_path.exists():
+                paddle_df = (parse_rf_log(rf_path)
+                             .dropna(subset=GYRO_COLUMNS)
+                             .reset_index(drop=True))
+                if not paddle_df.empty:
+                    idle_df = pd.DataFrame({
+                        "timestamp": paddle_df["timestamp"],
+                        "idle": compute_idle_mask(
+                            paddle_df[GYRO_COLUMNS].to_numpy(dtype=float)),
+                    })
+                    merged = pd.merge_asof(
+                        labels_df[["timestamp"]], idle_df, on="timestamp",
+                        direction="nearest", tolerance=_ALIGNMENT_TOLERANCE)
+                    keep = (merged["idle"] == False).to_numpy()  # noqa: E712 — NaN (no match) drops too
+                    gate_note = (f"idle gate dropped "
+                                 f"{len(labels_df) - int(keep.sum())}/{len(labels_df)}")
+                    labels_df = labels_df.loc[keep]
+
             assist = labels_df["assist_label"].dropna().to_numpy(dtype=float)
             turn = labels_df["turn_label"].dropna().to_numpy(dtype=float)
 
@@ -91,7 +126,8 @@ def main():
             turn_p95 = float(np.percentile(np.abs(turn), 95))
             print(f"[ok]  {log_dir.name}/{session}: "
                   f"{assist.size:>6} samples, "
-                  f"|assist| p95={assist_p95:7.3f}, |turn| p95={turn_p95:7.3f}")
+                  f"|assist| p95={assist_p95:7.3f}, |turn| p95={turn_p95:7.3f} "
+                  f"({gate_note})")
 
             all_assist.append(assist)
             all_turn.append(turn)

@@ -51,6 +51,7 @@ from utils import get_device, load_norm_stats, seed_everything
 # Match what train.py defaults were at the time this evaluate.py was written.
 _DEFAULT_SPLIT_INFO = {
     "filter_training_mode_only": True,
+    "filter_paddle_idle": False,  # checkpoints that predate the idle gate
     "single_session_split": False,
     "val_split": 0.2,
 }
@@ -327,6 +328,7 @@ def main():
                 meta_session, args.model, label_config,
                 norm_stats=(means, stds),
                 filter_training_mode_only=split_info["filter_training_mode_only"],
+                filter_idle=split_info["filter_paddle_idle"],
                 sample_fraction_range=eval_fraction_range,
             )
         except Exception as e:

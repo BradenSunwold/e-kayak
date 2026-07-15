@@ -74,7 +74,10 @@ class MotorManager(threading.Thread):
         # regression output in normalized label units: ~[-1, 1] for typical
         # paddling (1.0 = 95th-percentile stroke intensity, negative =
         # kayak decelerating). Clamped and mapped to RPM in WriteMotor.
+        # mPaddleIdle starts True (gate closed) so AUTO mode gives no assist
+        # until MlManager positively detects paddling.
         self.mAssistPrediction = 0.0
+        self.mPaddleIdle = True
         self.mAutoTargetRpm = 0.0
 
         # Kayak IMU state
@@ -378,8 +381,9 @@ class MotorManager(threading.Thread):
                 except queue.Empty:
                     break
             if latestMl is not None:
-                (self.mAssistPrediction,) = struct.unpack('f', latestMl)
-                self.mLogger.debug('Assist prediction: %+.3f', self.mAssistPrediction)
+                self.mAssistPrediction, self.mPaddleIdle = struct.unpack('f?', latestMl)
+                self.mLogger.debug('Assist prediction: %+.3f paddle_idle=%s',
+                                   self.mAssistPrediction, self.mPaddleIdle)
 
         self.mNextCommandReadTime += self.mCommandReadInterval
         self.mScheduler.enterabs(self.mNextCommandReadTime, 1, self.ReadCommands)
@@ -408,13 +412,23 @@ class MotorManager(threading.Thread):
                 self.mAutoRpmFilter.Clear()
                 self.mLogger.info('Entered AUTO mode')
 
-            # Map the regression prediction to a target RPM. Gain is an
-            # on-water tuning knob; the clamp turns negative predictions
-            # (kayak decelerating) into zero assist and saturates monster
-            # strokes at full assist. Full assist adds assistMaxRpm on top
-            # of the deadband RPM that keeps the prop spinning.
-            assistCommand = max(0.0, min(1.0, self.mAssistPrediction * self.mAutoAssistGain))
-            self.mAutoTargetRpm = self.mAutoDeadbandRpm + (assistCommand * self.mAutoAssistMaxRpm)
+            # Idle gate: while the paddle is still, target 0 RPM — not the
+            # deadband floor. The deadband keeps the prop spinning *between
+            # strokes*; a paddler at rest wants the motor fully off. The
+            # asymmetric filter below still shapes the spin-down, so closing
+            # the gate coasts the prop down at the ramp-down tau rather than
+            # hard-cutting it.
+            if self.mPaddleIdle:
+                assistCommand = 0.0
+                self.mAutoTargetRpm = 0.0
+            else:
+                # Map the regression prediction to a target RPM. Gain is an
+                # on-water tuning knob; the clamp turns negative predictions
+                # (kayak decelerating) into zero assist and saturates monster
+                # strokes at full assist. Full assist adds assistMaxRpm on top
+                # of the deadband RPM that keeps the prop spinning.
+                assistCommand = max(0.0, min(1.0, self.mAssistPrediction * self.mAutoAssistGain))
+                self.mAutoTargetRpm = self.mAutoDeadbandRpm + (assistCommand * self.mAutoAssistMaxRpm)
 
             # Asymmetric response: ramp-up tau when the target is above the
             # current filter output, ramp-down tau when it is below. The
@@ -461,6 +475,7 @@ class MotorManager(threading.Thread):
                 "max_rpms": float(self.mMaxRpms),
                 "assist_prediction": self.mAssistPrediction,
                 "auto_target_rpm": self.mAutoTargetRpm,
+                "paddle_idle": int(self.mPaddleIdle),
             })
 
         filteredRpm *= self.mMotorPolePairs

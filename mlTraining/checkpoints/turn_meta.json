@@ -8,11 +8,12 @@
     "turn_window_ms": 2000,
     "forward_accel_column": "accel_x",
     "yaw_rate_column": "gyro_z",
-    "assist_norm_scale": 0.389,
-    "turn_norm_scale": 0.126
+    "assist_norm_scale": 0.394,
+    "turn_norm_scale": 0.128
   },
   "split_info": {
     "filter_training_mode_only": true,
+    "filter_paddle_idle": true,
     "single_session_split": false,
     "val_split": 0.2
   },

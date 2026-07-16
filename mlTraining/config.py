@@ -75,7 +75,7 @@ WINDOW_SIZE_TURN = 40    # 2 s at 20 Hz
 # energy < 0.2 and active paddling at 0.7-1.4, so the thresholds sit in a
 # roughly order-of-magnitude gap. An incomplete window (startup) counts as
 # idle — the safe state: no assist until paddling is confirmed.
-IDLE_GATE_WINDOW_S = 3.0
+IDLE_GATE_WINDOW_S = 2.0
 IDLE_GATE_ENTER_THRESHOLD = 0.2
 IDLE_GATE_EXIT_THRESHOLD = 0.4
 

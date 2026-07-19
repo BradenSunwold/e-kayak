@@ -297,6 +297,17 @@ def main():
             eval_fraction_range = (0.0, 1.0)
         print(f"Using {len(sessions)} val session(s) from {paths['metadata'].name}")
 
+    # Evaluate with the same idle handling the checkpoint was trained with.
+    # Checkpoints from before label blending recorded a boolean
+    # "filter_paddle_idle" instead of "idle_mode" — map True to the old
+    # drop behavior and False to no idle handling.
+    if "idle_mode" in split_info:
+        idle_mode = split_info["idle_mode"]
+    else:
+        idle_mode = "drop" if split_info.get("filter_paddle_idle", True) else "off"
+        print(f"[note] checkpoint predates label blending; evaluating with "
+              f"idle_mode='{idle_mode}' to match its training-time filtering.")
+
     print(f"Split info: {split_info}")
     if eval_fraction_range != (0.0, 1.0):
         print(f"Evaluating on sample fraction range {eval_fraction_range} of each session "
@@ -328,7 +339,7 @@ def main():
                 meta_session, args.model, label_config,
                 norm_stats=(means, stds),
                 filter_training_mode_only=split_info["filter_training_mode_only"],
-                filter_idle=split_info["filter_paddle_idle"],
+                idle_mode=idle_mode,
                 sample_fraction_range=eval_fraction_range,
             )
         except Exception as e:

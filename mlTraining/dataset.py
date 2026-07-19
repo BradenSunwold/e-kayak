@@ -43,7 +43,7 @@ from config import (
     WINDOW_SIZE_ASSIST,
     WINDOW_SIZE_TURN,
 )
-from idle_gate import GYRO_COLUMNS, compute_idle_mask
+from idle_gate import GYRO_COLUMNS, compute_idle_mask, compute_label_blend_weights
 from plotters.labels import LabelConfig, compute_labels
 from plotters.parsers import parse_imu_log, parse_motor_log, parse_rf_log
 
@@ -66,6 +66,17 @@ _ALIGNMENT_TOLERANCE = pd.Timedelta(milliseconds=100)
 # fin centered, purely paddle-driven kayak IMU response." This is the
 # only mode where the kayak IMU signal cleanly reflects paddle input.
 _TRAINING_MODE_NAME = "TRAINING"
+
+# How SessionDataset treats paddle-idle samples (see config.py "Idle label
+# blending"):
+#   "blend" — keep every sample; force labels to 0 below the blend band and
+#             attenuate them by smoothstep inside it. Teaches the model a
+#             true 0→max output range.
+#   "drop"  — legacy behavior: remove idle samples entirely. Kept so
+#             checkpoints trained before blending can be evaluated with the
+#             same filtering they were trained with.
+#   "off"   — keep every sample with raw IMU-derived labels (A/B baseline).
+IDLE_MODES = ("blend", "drop", "off")
 
 
 def _compute_training_mode_mask(paddle_timestamps: np.ndarray,
@@ -176,7 +187,7 @@ class SessionDataset(Dataset):
                  label_config: LabelConfig,
                  norm_stats: tuple[np.ndarray, np.ndarray] | None = None,
                  filter_training_mode_only: bool = True,
-                 filter_idle: bool = True,
+                 idle_mode: str = "blend",
                  sample_fraction_range: tuple[float, float] = (0.0, 1.0)):
         """
         Args:
@@ -191,14 +202,19 @@ class SessionDataset(Dataset):
                 empty, the filter is silently no-op'd and all samples pass
                 through — the caller sees a print-line warning.
 
-            filter_idle:
-                When True (default), drops samples where the paddle is idle
-                per the idle gate (see config.py "Paddle idle gate"). While
-                the paddle is still, the labels are wind drift and coast-down
-                deceleration — boat responses the paddle input cannot
-                explain, so keeping them just teaches the model noise. The
-                runtime gate on the Pi zeroes assist in the same state, so
-                the model is never consulted there anyway.
+            idle_mode:
+                One of IDLE_MODES — how paddle-idle samples are handled.
+                Default "blend": keep every sample, but scale its label by
+                the paddle-motion-energy smoothstep weight — hard zero when
+                idle, IMU-derived label when clearly paddling, attenuated in
+                between. When the paddle is still we don't need the kayak
+                IMU to tell us the answer: correct assist is zero, and the
+                IMU signal is just wind drift and coast-down noise anyway.
+                Zero-weight samples keep their windows even where the IMU
+                label is NaN (end-of-session future window) — the label is
+                known without it. "drop" restores the pre-blend behavior of
+                removing idle samples (for evaluating old checkpoints);
+                "off" disables idle handling entirely.
 
             sample_fraction_range:
                 Sub-slice of the surviving valid_indices to actually use,
@@ -209,6 +225,8 @@ class SessionDataset(Dataset):
         """
         if model_type not in MODEL_TYPES:
             raise ValueError(f"model_type must be one of {MODEL_TYPES}, got {model_type!r}")
+        if idle_mode not in IDLE_MODES:
+            raise ValueError(f"idle_mode must be one of {IDLE_MODES}, got {idle_mode!r}")
 
         self.meta = meta
         self.model_type = model_type
@@ -247,13 +265,26 @@ class SessionDataset(Dataset):
         self.raw_paddle = aligned[CHANNEL_NAMES].to_numpy(dtype=np.float32)
         self.targets = aligned[self.label_column].to_numpy(dtype=np.float32)
 
+        # ── Blend labels toward zero at low paddle energy ─────────────────
+        # Must happen before validity filtering: forcing zero-weight labels
+        # to a literal 0 rescues idle samples whose IMU label is NaN, and
+        # attenuated NaN labels in the transition band stay NaN so the
+        # validity check below still drops them.
+        blend_weights = None
+        if idle_mode == "blend":
+            blend_weights = compute_label_blend_weights(
+                aligned[GYRO_COLUMNS].to_numpy(dtype=float))
+            self.targets = np.where(
+                blend_weights == 0.0, 0.0,
+                blend_weights * self.targets).astype(np.float32)
+
         # ── Find valid sample indices ─────────────────────────────────────
         # A sample at index i is valid if:
         #   (a) the paddle window [i-W+1 .. i] fits within the session
         #   (b) the label at i is not NaN (end-of-session future window
         #       ran off the data, or RF gap dropped the alignment)
         #   (c) optionally, the kayak was in TRAINING mode at that timestamp
-        #   (d) optionally, the paddle was not idle at that timestamp
+        #   (d) in "drop" idle mode, the paddle was not idle at that timestamp
         valid = np.flatnonzero(~np.isnan(self.targets))
         valid = valid[valid >= self.window_size - 1]
 
@@ -269,7 +300,7 @@ class SessionDataset(Dataset):
                         f"Session {meta.name} has no TRAINING-mode samples. "
                         f"Was the kayak ever in TRAINING mode during this session?")
 
-        if filter_idle:
+        if idle_mode == "drop":
             idle = compute_idle_mask(aligned[GYRO_COLUMNS].to_numpy(dtype=float))
             kept = valid[~idle[valid]]
             dropped = valid.size - kept.size
@@ -281,6 +312,15 @@ class SessionDataset(Dataset):
                 raise ValueError(
                     f"Session {meta.name} has no samples where the paddle "
                     f"was moving. Idle gate dropped everything.")
+        elif idle_mode == "blend":
+            w = blend_weights[valid]
+            n_zero = int((w == 0.0).sum())
+            n_partial = int(((w > 0.0) & (w < 1.0)).sum())
+            n_full = valid.size - n_zero - n_partial
+            print(f"[blend] {meta.log_dir.name}/{meta.name}: of {valid.size} "
+                  f"samples, {n_zero} zero-labeled (paddle idle), "
+                  f"{n_partial} attenuated (transition band), "
+                  f"{n_full} full-label (active paddling)")
 
         # Apply optional sub-slice (used by --single-session-split).
         lo_frac, hi_frac = sample_fraction_range
@@ -355,7 +395,7 @@ def _build_session_datasets(session_metas: list[SessionMeta],
                             model_type: str,
                             label_config: LabelConfig,
                             filter_training_mode_only: bool,
-                            filter_idle: bool = True,
+                            idle_mode: str = "blend",
                             sample_fraction_range: tuple[float, float] = (0.0, 1.0),
                             ) -> tuple[list[SessionDataset], list[SessionMeta]]:
     """Try to build a SessionDataset for each session. Skip any that fail
@@ -370,7 +410,7 @@ def _build_session_datasets(session_metas: list[SessionMeta],
             ds = SessionDataset(
                 meta, model_type, label_config,
                 filter_training_mode_only=filter_training_mode_only,
-                filter_idle=filter_idle,
+                idle_mode=idle_mode,
                 sample_fraction_range=sample_fraction_range,
             )
         except ValueError as e:
@@ -391,7 +431,7 @@ def build_train_val_datasets(log_dirs: list[Path],
                              val_split: float = VAL_SPLIT,
                              random_seed: int = RANDOM_SEED,
                              filter_training_mode_only: bool = True,
-                             filter_idle: bool = True,
+                             idle_mode: str = "blend",
                              single_session_split: bool = False):
     """End-to-end constructor: discover, split, compute norm stats, return
     concatenated train and val datasets ready for a DataLoader.
@@ -409,9 +449,10 @@ def build_train_val_datasets(log_dirs: list[Path],
         filter_training_mode_only: propagated to every SessionDataset.
             Default True — only paddle samples where the kayak was in
             TRAINING mode are kept.
-        filter_idle: propagated to every SessionDataset. Default True —
-            paddle-idle samples are dropped (see config.py "Paddle idle
-            gate").
+        idle_mode: propagated to every SessionDataset. Default "blend" —
+            paddle-idle samples are kept with labels blended toward zero
+            (see config.py "Idle label blending"); "drop" removes them,
+            "off" keeps them with raw labels.
         single_session_split: when True, expect exactly one usable session
             and split its samples temporally (first (1 - val_split) for
             train, last val_split for val). This is a smoke-test hack —
@@ -436,7 +477,7 @@ def build_train_val_datasets(log_dirs: list[Path],
         # Find the one session that survives parsing, then slice its
         # samples into a train chunk and a val chunk.
         survivors, survivor_metas = _build_session_datasets(
-            sessions, model_type, cfg, filter_training_mode_only, filter_idle,
+            sessions, model_type, cfg, filter_training_mode_only, idle_mode,
             sample_fraction_range=(0.0, 1.0),
         )
         if not survivors:
@@ -449,11 +490,11 @@ def build_train_val_datasets(log_dirs: list[Path],
         chosen_meta = survivor_metas[0]
         train_hi = 1.0 - val_split
         train_datasets, _ = _build_session_datasets(
-            [chosen_meta], model_type, cfg, filter_training_mode_only, filter_idle,
+            [chosen_meta], model_type, cfg, filter_training_mode_only, idle_mode,
             sample_fraction_range=(0.0, train_hi),
         )
         val_datasets, _ = _build_session_datasets(
-            [chosen_meta], model_type, cfg, filter_training_mode_only, filter_idle,
+            [chosen_meta], model_type, cfg, filter_training_mode_only, idle_mode,
             sample_fraction_range=(train_hi, 1.0),
         )
         train_meta = [chosen_meta]
@@ -468,9 +509,9 @@ def build_train_val_datasets(log_dirs: list[Path],
 
         train_meta, val_meta = split_sessions(sessions, val_split, random_seed)
         train_datasets, train_meta = _build_session_datasets(
-            train_meta, model_type, cfg, filter_training_mode_only, filter_idle)
+            train_meta, model_type, cfg, filter_training_mode_only, idle_mode)
         val_datasets, val_meta = _build_session_datasets(
-            val_meta, model_type, cfg, filter_training_mode_only, filter_idle)
+            val_meta, model_type, cfg, filter_training_mode_only, idle_mode)
 
     if not train_datasets:
         raise ValueError("No training samples survived filtering. "

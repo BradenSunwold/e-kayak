@@ -29,6 +29,8 @@ from config import (
     IDLE_GATE_ENTER_THRESHOLD,
     IDLE_GATE_EXIT_THRESHOLD,
     IDLE_GATE_WINDOW_S,
+    LABEL_BLEND_ENERGY_HIGH,
+    LABEL_BLEND_ENERGY_LOW,
     SAMPLE_RATE_HZ,
 )
 
@@ -74,3 +76,27 @@ def compute_idle_mask(gyro_xyz: np.ndarray,
             state = True
         idle[i] = state
     return idle
+
+
+def compute_label_blend_weights(gyro_xyz: np.ndarray,
+                                sample_rate_hz: float = SAMPLE_RATE_HZ
+                                ) -> np.ndarray:
+    """Per-sample weight in [0, 1] that scales training labels toward zero
+    as paddle motion energy falls (see config.py "Idle label blending").
+
+    Training-only — the runtime gate on the Pi stays the binary hysteresis
+    state machine above. Unlike the gate, this is a memoryless function of
+    the current energy value: smoothstep from 0 at LABEL_BLEND_ENERGY_LOW
+    to 1 at LABEL_BLEND_ENERGY_HIGH. Smoothstep (a²(3-2a)) rather than a
+    linear ramp so the label-vs-energy curve has no slope discontinuities
+    at the two thresholds — a smooth target is easier for the network to
+    represent than one with corners.
+
+    NaN energy (incomplete trailing window at session start) maps to
+    weight 0, matching the gate's "incomplete window counts as idle" rule.
+    """
+    energy = paddle_motion_energy(gyro_xyz, sample_rate_hz)
+    a = ((energy - LABEL_BLEND_ENERGY_LOW)
+         / (LABEL_BLEND_ENERGY_HIGH - LABEL_BLEND_ENERGY_LOW))
+    a = np.clip(np.nan_to_num(a, nan=0.0), 0.0, 1.0)
+    return a * a * (3.0 - 2.0 * a)

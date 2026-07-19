@@ -41,7 +41,7 @@ from config import (
     VAL_SPLIT,
     WEIGHT_DECAY,
 )
-from dataset import SessionMeta, build_train_val_datasets
+from dataset import IDLE_MODES, SessionMeta, build_train_val_datasets
 from model import build_model, count_parameters, input_window_size
 from plotters.labels import LabelConfig
 from utils import get_device, save_norm_stats, seed_everything
@@ -221,10 +221,12 @@ def main():
                         help="Include paddle samples from all motor modes. "
                              "Default is TRAINING-mode-only, since motor thrust in "
                              "MANUAL/AUTO contaminates the kayak IMU labels.")
-    parser.add_argument("--no-idle-gate", action="store_true",
-                        help="Keep paddle-idle samples. Default drops them: while "
-                             "the paddle is still, labels are wind drift and "
-                             "coast-down the paddle input cannot explain.")
+    parser.add_argument("--idle-mode", choices=IDLE_MODES, default="blend",
+                        help="How paddle-idle samples are handled. 'blend' "
+                             "(default) keeps them with labels scaled toward "
+                             "zero by paddle motion energy — teaches the model "
+                             "a true 0-to-max assist range. 'drop' removes them "
+                             "(pre-blend behavior); 'off' keeps raw labels.")
     parser.add_argument("--single-session-split", action="store_true",
                         help="Split one session temporally into train/val chunks "
                              "instead of splitting across sessions. Smoke-test only — "
@@ -244,7 +246,7 @@ def main():
             args.log_dirs, args.model, label_config,
             args.val_split, args.random_seed,
             filter_training_mode_only=not args.all_modes,
-            filter_idle=not args.no_idle_gate,
+            idle_mode=args.idle_mode,
             single_session_split=args.single_session_split,
         )
 
@@ -296,7 +298,7 @@ def main():
                   train_sessions, val_sessions,
                   split_info={
                       "filter_training_mode_only": not args.all_modes,
-                      "filter_paddle_idle": not args.no_idle_gate,
+                      "idle_mode": args.idle_mode,
                       "single_session_split": args.single_session_split,
                       "val_split": args.val_split,
                   })

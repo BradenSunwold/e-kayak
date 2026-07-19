@@ -8,19 +8,23 @@
     "turn_window_ms": 2000,
     "forward_accel_column": "accel_x",
     "yaw_rate_column": "gyro_z",
-    "assist_norm_scale": 0.394,
-    "turn_norm_scale": 0.128
+    "assist_norm_scale": 0.383,
+    "turn_norm_scale": 0.122
   },
   "split_info": {
     "filter_training_mode_only": true,
-    "filter_paddle_idle": true,
+    "idle_mode": "blend",
     "single_session_split": false,
     "val_split": 0.2
   },
   "train_sessions": [
     {
       "log_dir": "/Users/bradensunwold/Documents/KayakLogs/Ongoing_Training_Sessions",
-      "name": "2026-07-04_14:21.07"
+      "name": "2026-07-11_07:41.21"
+    },
+    {
+      "log_dir": "/Users/bradensunwold/Documents/KayakLogs/Ongoing_Training_Sessions",
+      "name": "2026-07-11_08:11.37"
     },
     {
       "log_dir": "/Users/bradensunwold/Documents/KayakLogs/Ongoing_Training_Sessions",
@@ -28,7 +32,7 @@
     },
     {
       "log_dir": "/Users/bradensunwold/Documents/KayakLogs/Ongoing_Training_Sessions",
-      "name": "2026-07-11_08:11.37"
+      "name": "2026-07-15_17:55.25"
     },
     {
       "log_dir": "/Users/bradensunwold/Documents/KayakLogs/Ongoing_Training_Sessions",
@@ -42,7 +46,7 @@
   "val_sessions": [
     {
       "log_dir": "/Users/bradensunwold/Documents/KayakLogs/Ongoing_Training_Sessions",
-      "name": "2026-07-11_07:41.21"
+      "name": "2026-07-04_14:21.07"
     }
   ]
 }

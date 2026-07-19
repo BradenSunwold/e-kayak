@@ -13,7 +13,7 @@
   ],
   "window_size": 5,
   "sample_rate_hz": 20,
-  "label_norm_scale": 0.394,
+  "label_norm_scale": 0.383,
   "label_config": {
     "assist_delay_ms": 100,
     "turn_delay_ms": 200,
@@ -21,8 +21,8 @@
     "turn_window_ms": 2000,
     "forward_accel_column": "accel_x",
     "yaw_rate_column": "gyro_z",
-    "assist_norm_scale": 0.394,
-    "turn_norm_scale": 0.128
+    "assist_norm_scale": 0.383,
+    "turn_norm_scale": 0.122
   },
   "idle_gate": {
     "signal": "rolling_std_of_gyro_magnitude",
@@ -30,8 +30,12 @@
     "enter_threshold": 0.2,
     "exit_threshold": 0.4
   },
-  "checkpoint_epoch": 80,
-  "checkpoint_validation_loss": 0.026177355017099453,
-  "checkpoint_validation_mae": 0.17993953824043274,
-  "checkpoint_validation_r2": 0.5989342818370047
+  "label_blend": {
+    "energy_low": 0.2,
+    "energy_high": 0.7
+  },
+  "checkpoint_epoch": 73,
+  "checkpoint_validation_loss": 0.042035589022906335,
+  "checkpoint_validation_mae": 0.2447792887687683,
+  "checkpoint_validation_r2": -0.2501883947081427
 }

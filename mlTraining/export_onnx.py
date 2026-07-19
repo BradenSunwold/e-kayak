@@ -40,6 +40,8 @@ from config import (
     IDLE_GATE_ENTER_THRESHOLD,
     IDLE_GATE_EXIT_THRESHOLD,
     IDLE_GATE_WINDOW_S,
+    LABEL_BLEND_ENERGY_HIGH,
+    LABEL_BLEND_ENERGY_LOW,
     MODEL_TYPE_ASSIST,
     MODEL_TYPES,
     NUM_CHANNELS,
@@ -161,15 +163,24 @@ def main():
         # (forward accel in m/s^2 for assist, yaw rate for turn).
         "label_norm_scale": label_norm_scale,
         "label_config": label_config,
-        # Paddle idle gate the Pi runtime must mirror: training drops
-        # paddle-idle samples, so the model never sees an idle paddle —
-        # the Pi must gate assist to zero in that state rather than ask
-        # the model. Reference implementation: idle_gate.py.
+        # Paddle idle gate the Pi runtime mirrors. Since idle label
+        # blending, the model IS trained on idle windows (labels forced to
+        # zero) and ramps assist down natively — the runtime gate is a
+        # deterministic backstop, not the primary idle response.
+        # Reference implementation: idle_gate.py.
         "idle_gate": {
             "signal": "rolling_std_of_gyro_magnitude",
             "window_seconds": IDLE_GATE_WINDOW_S,
             "enter_threshold": IDLE_GATE_ENTER_THRESHOLD,
             "exit_threshold": IDLE_GATE_EXIT_THRESHOLD,
+        },
+        # Training-only, recorded for provenance — the Pi does not act on
+        # these. Labels were scaled toward zero by smoothstep of paddle
+        # motion energy across this band; changing them requires a retrain
+        # to take effect (see config.py "Idle label blending").
+        "label_blend": {
+            "energy_low": LABEL_BLEND_ENERGY_LOW,
+            "energy_high": LABEL_BLEND_ENERGY_HIGH,
         },
         "checkpoint_epoch": int(checkpoint["epoch"]),
         "checkpoint_validation_loss": float(checkpoint["val_loss"]),

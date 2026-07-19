@@ -41,8 +41,8 @@ LABEL_TURN_WINDOW_MS = 2000      # longer integration window for smoother turn t
 
 # Divisors that bring labels into roughly unit scale before training.
 # Start at 1.0; once you have data, replace with ~95th percentile of |label|.
-LABEL_ASSIST_NORM_SCALE = 0.394     # recomputed 7-14-26, idle-gated, over Ongoing_Training_Sessions (6 sessions, 61034 samples)
-LABEL_TURN_NORM_SCALE = 0.128       # recomputed 7-14-26, idle-gated (new sessions have far more turning than 7-4 corpus)
+LABEL_ASSIST_NORM_SCALE = 0.383     # recomputed 7-14-26, idle-gated, over Ongoing_Training_Sessions (6 sessions, 61034 samples)
+LABEL_TURN_NORM_SCALE = 0.122       # recomputed 7-14-26, idle-gated (new sessions have far more turning than 7-4 corpus)
 
 # ── Paddle input windows (per-model) ──────────────────────────────────────
 # Each model gets a fixed window of paddle IMU history at every prediction.
@@ -75,9 +75,32 @@ WINDOW_SIZE_TURN = 40    # 2 s at 20 Hz
 # energy < 0.2 and active paddling at 0.7-1.4, so the thresholds sit in a
 # roughly order-of-magnitude gap. An incomplete window (startup) counts as
 # idle — the safe state: no assist until paddling is confirmed.
-IDLE_GATE_WINDOW_S = 2.0
+IDLE_GATE_WINDOW_S = 3.0
 IDLE_GATE_ENTER_THRESHOLD = 0.2
 IDLE_GATE_EXIT_THRESHOLD = 0.4
+
+# ── Idle label blending (training only) ───────────────────────────────────
+# Instead of dropping paddle-idle samples from training, keep them and blend
+# their labels toward zero based on paddle motion energy (same rolling-std
+# signal the idle gate uses):
+#   energy <= LOW            → label forced to 0 (paddle is idle; the correct
+#                              assist is zero, and the IMU-derived label is
+#                              pure wind/current/coast-down noise anyway)
+#   energy >= HIGH           → IMU-derived label trusted fully
+#   LOW < energy < HIGH      → label scaled by smoothstep between the two
+# This teaches the model a true 0→max output range with a smooth taper, so
+# at inference it ramps assist down toward zero on its own instead of
+# floating just above the deadband until the runtime idle gate cuts it.
+# The runtime gate (constants above) is unchanged and becomes a backstop.
+#
+# LOW sits at the idle-gate enter threshold (idle energy < 0.2 in session
+# data). HIGH sits just under the weakest genuine strokes (active paddling
+# measured at 0.7-1.4 on 7-11-26 sessions). Labels in the band are
+# deliberately attenuated — light paddling gets light assist — and the band
+# is also where kayak-IMU labels are least trustworthy (low signal-to-noise),
+# so attenuation doubles as label-noise suppression.
+LABEL_BLEND_ENERGY_LOW = IDLE_GATE_ENTER_THRESHOLD
+LABEL_BLEND_ENERGY_HIGH = 0.7
 
 # Model identifiers. Used as the string passed to build_model() and as the
 # key for selecting which label column a SessionDataset returns.

@@ -142,13 +142,17 @@ def _predict_model_series(model_type, paddle_df):
     on the Pi: slide a window over the paddle stream, z-score normalize each
     window with the training-time channel statistics, predict at every sample
     (stride 1), and zero predictions where the paddle idle gate is closed —
-    the deployed system forces assist to zero there (the model never trained
-    on a still paddle), so the ghost must see the same gated output.
+    the deployed system forces assist to zero there as a deterministic
+    backstop, so the ghost must see the same gated output.
 
     Returns a DataFrame with columns:
       timestamp             — paddle sample time the window ends at
-      prediction            — raw model output (normalized label units)
+      prediction            — idle-gated model output (normalized label units)
       prediction_physical   — prediction * label_norm_scale (physical units)
+      prediction_raw        — ungated model output (normalized label units).
+                              Since idle label blending the model is trained
+                              to ramp to zero on its own; raw-vs-gated shows
+                              how well it does that before the gate steps in.
 
     The first (window_size - 1) samples can't fill a window; their prediction
     is 0 — the "buffer warming up" state on the Pi.
@@ -206,13 +210,16 @@ def _predict_model_series(model_type, paddle_df):
 
     # Runtime idle gate, applied offline. Same reference implementation the
     # Pi's streaming gate is parity-tested against, so ghost and boat make
-    # the identical gate decision at every sample.
+    # the identical gate decision at every sample. The ungated copy is kept
+    # for plotting only — the ghost always runs on the gated output.
+    ungated = predictions.copy()
     predictions[compute_idle_mask(clean[GYRO_COLUMNS].to_numpy(dtype=float))] = 0.0
 
     return pd.DataFrame({
         "timestamp": clean["timestamp"],
         "prediction": predictions,
         "prediction_physical": predictions * label_norm_scale,
+        "prediction_raw": ungated,
     })
 
 
@@ -240,22 +247,30 @@ def _compute_model_ghost(kayak_df, paddle_df, labels_df, labels_cfg, traj_cfg):
     de-normalized turn *label* so the ghost still steers plausibly — with a
     printed warning, since heading is then truth-derived, not model-derived.
 
-    Returns the trajectory DataFrame (frame-aligned with the kayak IMU), or
-    None if the assist model artifacts are missing or there is no paddle data.
+    Returns (trajectory, predictions):
+      trajectory  — DataFrame frame-aligned with the kayak IMU, or None if
+                    the assist model artifacts are missing or there is no
+                    paddle data.
+      predictions — dict of the per-model prediction DataFrames that were
+                    computed ({"assist": ..., "turn": ...}), for plotting
+                    raw-vs-gated overlays on the time-series panels. Empty
+                    when the trajectory is None.
     """
     if paddle_df.empty:
         print("[warn] model ghost disabled: no paddle IMU data in this window")
-        return None
+        return None, {}
 
     try:
         assist_pred = _predict_model_series("assist", paddle_df)
     except FileNotFoundError as e:
         print(f"[warn] model ghost disabled: {e}")
-        return None
+        return None, {}
+    predictions = {"assist": assist_pred}
     forward_accel = _align_to_kayak(kayak_df, assist_pred)
 
     try:
         turn_pred = _predict_model_series("turn", paddle_df)
+        predictions["turn"] = turn_pred
         yaw_rate = _align_to_kayak(kayak_df, turn_pred)
         print("[ok] model ghost: assist + turn predictions")
     except FileNotFoundError as e:
@@ -267,7 +282,7 @@ def _compute_model_ghost(kayak_df, paddle_df, labels_df, labels_cfg, traj_cfg):
         traj_cfg.forward_accel_column: forward_accel.reset_index(drop=True),
         traj_cfg.yaw_rate_column: yaw_rate.reset_index(drop=True),
     })
-    return compute_trajectory(ghost_input, traj_cfg)
+    return compute_trajectory(ghost_input, traj_cfg), predictions
 
 
 def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_speed, ghost_source):
@@ -307,6 +322,7 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     # source-vs-truth differences rather than integration artifacts.
     # Each entry: {"name", "traj"} — drawing state is attached later.
     ghosts = []
+    model_preds = {}
     if ghost_source in ("label", "both"):
         label_ghost = compute_ghost_trajectory_from_labels(
             labels_df, traj_cfg,
@@ -314,7 +330,7 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
             turn_norm_scale=labels_cfg.turn_norm_scale)
         ghosts.append({"name": "label", "traj": label_ghost})
     if ghost_source in ("model", "both"):
-        model_ghost = _compute_model_ghost(
+        model_ghost, model_preds = _compute_model_ghost(
             kayak_df, paddle_df, labels_df, labels_cfg, traj_cfg)
         if model_ghost is not None:
             ghosts.append({"name": "model", "traj": model_ghost})
@@ -378,6 +394,17 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     if "assist_label" in labels_df.columns:
         ax_fwd.plot(labels_df["timestamp"], labels_df["assist_label"],
                     color="tab:orange", linewidth=1.4, label="assist_label")
+    # Model prediction overlay (normalized units, same as the label trace).
+    # Raw vs gated diverge only where the idle gate is closed — the gap is
+    # what the deterministic backstop is still doing for the model.
+    if "assist" in model_preds:
+        pred = model_preds["assist"]
+        ax_fwd.plot(pred["timestamp"], pred["prediction_raw"],
+                    color="tab:green", linewidth=0.9, linestyle="--", alpha=0.8,
+                    label="model prediction (raw)")
+        ax_fwd.plot(pred["timestamp"], pred["prediction"],
+                    color="tab:green", linewidth=1.2,
+                    label="model prediction (idle-gated)")
     ax_fwd.legend(loc="upper right", fontsize=7)
     ax_fwd.set_title("Forward axis: signal vs. label")
     ax_fwd.grid(True, alpha=0.3)
@@ -387,6 +414,14 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     if "turn_label" in labels_df.columns:
         ax_yaw.plot(labels_df["timestamp"], labels_df["turn_label"],
                     color="tab:orange", linewidth=1.4, label="turn_label")
+    if "turn" in model_preds:
+        pred = model_preds["turn"]
+        ax_yaw.plot(pred["timestamp"], pred["prediction_raw"],
+                    color="tab:green", linewidth=0.9, linestyle="--", alpha=0.8,
+                    label="model prediction (raw)")
+        ax_yaw.plot(pred["timestamp"], pred["prediction"],
+                    color="tab:green", linewidth=1.2,
+                    label="model prediction (idle-gated)")
     ax_yaw.legend(loc="upper right", fontsize=7)
     ax_yaw.set_title("Yaw axis: signal vs. label")
     ax_yaw.grid(True, alpha=0.3)

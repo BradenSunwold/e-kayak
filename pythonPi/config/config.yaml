@@ -26,7 +26,7 @@ motorManager:
     - 0.0
     - 60.0
     - 80.0
-    - 97.0
+    - 98.0
   underVoltage: 20
   batteryCalibrationOffset: .8    # VESC battery monitor ~.7 - .8V off from measured battery voltage
   maxTemp: 53
@@ -51,7 +51,7 @@ motorManager:
   rpmFilterTauInSeconds: 1.3       # RC filter time constant for RPM rate limiter (manual mode)
   autoMode:
     deadbandRpm: 725                # 750 RPM held between strokes (keeps motor spinning) - 300 for testing
-    assistMaxRpm: 1400              # 1300 RPM added on top of deadband at full assist (clamped prediction = 1.0) - 200 for testing
+    assistMaxRpm: 1420              # 1300 RPM added on top of deadband at full assist (clamped prediction = 1.0) - 200 for testing
     assistGain: 1.0                 # Tuning gain on the assist prediction before clamping to [0, 1]
     rampUpTauInSeconds: 0.2          # RC filter tau when target RPM is rising
     rampDownTauInSeconds: 0.2        # RC filter tau when target RPM is falling ("sustain vs pulse" decay knob)

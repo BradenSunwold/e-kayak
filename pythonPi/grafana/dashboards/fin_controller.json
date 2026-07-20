@@ -341,13 +341,89 @@
       ]
     },
     {
+      "title": "Deadband Compensation (raw PID output vs compensated)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "degree",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "pointSize": 1,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pid_output"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "white"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pid_output_compensated"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influxdb-ekayak"
+          },
+          "query": "from(bucket: \"telemetry\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"fin_controller\")\n  |> filter(fn: (r) => r._field == \"pid_output\" or r._field == \"pid_output_compensated\")\n  |> filter(fn: (r) => if \"${session}\" == \"$__all\" then true else r.session == \"${session}\")",
+          "refId": "A"
+        }
+      ]
+    },
+    {
       "title": "Control Mode (0 = Closed Loop, 1 = Open Loop)",
       "type": "state-timeline",
       "gridPos": {
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {

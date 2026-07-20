@@ -72,12 +72,13 @@ WINDOW_SIZE_TURN = 40    # 2 s at 20 Hz
 # Hysteresis: enter idle when energy drops below ENTER, exit as soon as it
 # rises above EXIT. The band between them holds the previous state so the
 # gate doesn't chatter at the boundary. Session data (7-11-26) shows idle
-# energy < 0.2 and active paddling at 0.7-1.4, so the thresholds sit in a
-# roughly order-of-magnitude gap. An incomplete window (startup) counts as
-# idle — the safe state: no assist until paddling is confirmed.
-IDLE_GATE_WINDOW_S = 3.0
-IDLE_GATE_ENTER_THRESHOLD = 0.2
-IDLE_GATE_EXIT_THRESHOLD = 0.4
+# energy < 0.2 and active paddling at 0.7-1.4; ENTER raised to 0.3 (7-20-26)
+# to close the idle gate sooner between strokes and shorten the assist ramp
+# after a stroke burst. An incomplete window (startup) counts as idle — the
+# safe state: no assist until paddling is confirmed.
+IDLE_GATE_WINDOW_S = 2.0
+IDLE_GATE_ENTER_THRESHOLD = 0.3
+IDLE_GATE_EXIT_THRESHOLD = 0.5
 
 # ── Idle label blending (training only) ───────────────────────────────────
 # Instead of dropping paddle-idle samples from training, keep them and blend
@@ -93,8 +94,7 @@ IDLE_GATE_EXIT_THRESHOLD = 0.4
 # floating just above the deadband until the runtime idle gate cuts it.
 # The runtime gate (constants above) is unchanged and becomes a backstop.
 #
-# LOW sits at the idle-gate enter threshold (idle energy < 0.2 in session
-# data). HIGH sits just under the weakest genuine strokes (active paddling
+# LOW sits at the idle-gate enter threshold. HIGH sits just under the weakest genuine strokes (active paddling
 # measured at 0.7-1.4 on 7-11-26 sessions). Labels in the band are
 # deliberately attenuated — light paddling gets light assist — and the band
 # is also where kayak-IMU labels are least trustworthy (low signal-to-noise),

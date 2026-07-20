@@ -149,6 +149,7 @@ class MotorManager(threading.Thread):
         self.mPitchDeadbandDeg = self.mFinConfig.get('pitchDeadbandDeg', 5.0)
         self.mOpenLoopGain = self.mFinConfig.get('openLoopGain', 1.0)       # Fin degrees per degree of oar pitch
         self.mMaxFinAngle = self.mFinConfig.get('maxFinAngleDeg', 30.0)     # Max fin deflection in degrees
+        self.mOpenLoopMaxFinAngle = self.mFinConfig.get('openLoopMaxFinAngleDeg', self.mMaxFinAngle)  # Separate, tighter cap for manual steering
         self.mServoNeutralAngle = 90.0                                       # Servo angle that corresponds to 0 fin deflection
         self.mFinFilterTau = self.mFinConfig.get('finFilterTauInSeconds', 0.3)
 
@@ -160,6 +161,17 @@ class MotorManager(threading.Thread):
         self.mHeadingIntegralLimit = headingPid.get('integralLimit', 30.0)
         self.mHeadingOutputMin = headingPid.get('outputMinDeg', -self.mMaxFinAngle)
         self.mHeadingOutputMax = headingPid.get('outputMaxDeg', self.mMaxFinAngle)
+
+        # Deadband compensation config — see _ApplyDeadbandCompensation
+        deadbandComp = self.mFinConfig.get('deadbandCompensation', {})
+        self.mDeadbandApplyThresholdDeg = deadbandComp.get('applyThresholdDeg', 0.0)
+        self.mFinDeadbandPosDeg = deadbandComp.get('positiveDeg', 0.0)
+        self.mFinDeadbandNegDeg = deadbandComp.get('negativeDeg', 0.0)
+        # Compensated (pre-filter) PID output — telemetry only, so Grafana can
+        # show the deadband jump next to the raw pid_output. Only updated on
+        # closed-loop cycles; holds its last value during open-loop steering,
+        # matching how pid_output/pid_p_term/etc. already behave.
+        self.mLastCompensatedPidOutput = 0.0
 
         # Init fin servo via gpiozero + pigpio for jitter-free PWM
         servoPin = self.mFinConfig.get('servoGpioPin', 12)
@@ -629,8 +641,8 @@ class MotorManager(threading.Thread):
                     effectivePitch = self.mOarPitch - self.mPitchDeadbandDeg
                 else:
                     effectivePitch = self.mOarPitch + self.mPitchDeadbandDeg
-                self.mFinAngle = max(-self.mMaxFinAngle,
-                                     min(self.mMaxFinAngle,
+                self.mFinAngle = max(-self.mOpenLoopMaxFinAngle,
+                                     min(self.mOpenLoopMaxFinAngle,
                                          effectivePitch * self.mOpenLoopGain))
                 self.mLogger.debug('Setpoint STEERING  oar_pitch=%.2f  fin_angle=%.2f',
                                    self.mOarPitch, self.mFinAngle)
@@ -652,6 +664,22 @@ class MotorManager(threading.Thread):
 
         self.mPreviousMode = self.mMode
 
+    def _ApplyDeadbandCompensation(self, pidOutput):
+        """Push a closed-loop PID output past the fin's hydrodynamic dead zone.
+
+        The boat produces ~no yaw response for small fin deflections (measured
+        asymmetric: roughly +4/-6 deg). Below applyThresholdDeg the PID output
+        is treated as noise and zeroed; above it, the dead zone is added back
+        on top so the commanded fin angle starts where the boat actually
+        starts responding, and the PID's own output continues linearly from
+        there rather than being wasted inside the dead zone.
+        """
+        if pidOutput > self.mDeadbandApplyThresholdDeg:
+            return pidOutput + self.mFinDeadbandPosDeg
+        elif pidOutput < -self.mDeadbandApplyThresholdDeg:
+            return pidOutput - self.mFinDeadbandNegDeg
+        return 0.0
+
     def _FinController(self):
         """Pure heading controller. Computes fin angle from setpoint and feedback, writes to servo.
 
@@ -670,13 +698,15 @@ class MotorManager(threading.Thread):
 
             # PID controller outputs fin angle in degrees
             finAngle = self.mHeadingPid.Update(headingError, self.mKayakHeading)
+            compensatedFinAngle = self._ApplyDeadbandCompensation(finAngle)
+            self.mLastCompensatedPidOutput = compensatedFinAngle
 
             # Smooth through the same fin angle filter so the transition from
             # open-loop decays naturally instead of snapping
-            filteredFinAngle = self.mFinAngleFilter.Feed(finAngle)
+            filteredFinAngle = self.mFinAngleFilter.Feed(compensatedFinAngle)
             self._SetFinAngle(filteredFinAngle)
-            self.mLogger.debug('FinCtrl CLOSED_LOOP  setpoint=%.2f  heading=%.2f  error=%.2f  pid=%.2f  fin=%.2f',
-                               self.mHeadingSetpoint, self.mKayakHeading, headingError, finAngle, filteredFinAngle)
+            self.mLogger.debug('FinCtrl CLOSED_LOOP  setpoint=%.2f  heading=%.2f  error=%.2f  pid=%.2f  pid_comp=%.2f  fin=%.2f',
+                               self.mHeadingSetpoint, self.mKayakHeading, headingError, finAngle, compensatedFinAngle, filteredFinAngle)
 
     def FinControlLoop(self):
         """Scheduled entry point for the fin control pipeline."""
@@ -708,6 +738,7 @@ class MotorManager(threading.Thread):
                 "pid_i_term": self.mHeadingPid.mLastITerm,
                 "pid_d_term": self.mHeadingPid.mLastDTerm,
                 "pid_output": self.mHeadingPid.mLastOutput,
+                "pid_output_compensated": self.mLastCompensatedPidOutput,
                 "pid_integral": self.mHeadingPid.mIntegral,
             })
 

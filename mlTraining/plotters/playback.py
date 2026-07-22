@@ -11,6 +11,13 @@ What it shows:
   - Bottom: slider for scrubbing, play/pause button.
 
 Usage:
+  # Auto mode (no config): open every validation session recorded in the
+  # checkpoint metadata, one window each. --model picks which checkpoint.
+  python -m plotters.playback                     # turn model's val sessions
+  python -m plotters.playback --model assist      # assist model's val sessions
+  python -m plotters.playback --ghost model       # overlay ONNX predictions
+
+  # Override mode: plot one specific session from a YAML config.
   python -m plotters.playback plotters/configs/raw_signals.yaml
   python -m plotters.playback plotters/configs/raw_signals.yaml \
       --start 30 --end 120        # seconds from session start
@@ -25,7 +32,8 @@ Usage:
 
 Uses the same YAML config format as plot_session.py — only the session
 and log_dir fields are required; the labels_config block is optional and
-controls the overlaid label traces.
+controls the overlaid label traces. In auto mode the session list and label
+config come from the checkpoint metadata instead of a YAML file.
 """
 
 from __future__ import annotations
@@ -42,7 +50,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.patches import FancyArrow
 from matplotlib.widgets import Button, Slider
 
-from config import CHANNEL_NAMES, CHECKPOINT_DIR
+from config import CHANNEL_NAMES, CHECKPOINT_DIR, MODEL_TYPES
 from idle_gate import GYRO_COLUMNS, compute_idle_mask
 from plotters import parsers
 from plotters.labels import LabelConfig, compute_labels
@@ -120,6 +128,34 @@ def _load_yaml(path):
         cfg = yaml.safe_load(fh)
     labels_cfg = LabelConfig(**cfg["labels_config"]) if cfg.get("labels_config") else LabelConfig()
     return cfg["session"], Path(cfg["log_dir"]).expanduser(), labels_cfg
+
+
+def _load_val_sessions(model_type):
+    """Read the validation session list a training run recorded in its
+    checkpoint metadata. Returns a list of (session_name, log_dir, labels_cfg)
+    tuples — one per held-out val session — so playback can auto-plot exactly
+    the sessions the model was validated on.
+
+    The LabelConfig is reconstructed from the same metadata, so the overlaid
+    label traces match what the model actually trained against (label_config
+    keys not present in an older meta fall back to LabelConfig defaults).
+    """
+    meta_path = CHECKPOINT_DIR / f"{model_type}_meta.json"
+    if not meta_path.exists():
+        raise SystemExit(
+            f"No checkpoint metadata for '{model_type}' at {meta_path}. "
+            f"Train first (python train.py --model {model_type} ...), or pass a "
+            f"YAML config to plot a specific session instead.")
+    with open(meta_path) as fh:
+        meta = json.load(fh)
+    labels_cfg = LabelConfig(**meta.get("label_config", {}))
+    val_sessions = meta.get("val_sessions", [])
+    if not val_sessions:
+        raise SystemExit(f"{meta_path.name} lists no val_sessions to plot.")
+    return [
+        (entry["name"], Path(entry["log_dir"]).expanduser(), labels_cfg)
+        for entry in val_sessions
+    ]
 
 
 def _draw_boat(ax, x, y, heading_rad, length=2.0, color="tab:red"):
@@ -285,7 +321,15 @@ def _compute_model_ghost(kayak_df, paddle_df, labels_df, labels_cfg, traj_cfg):
     return compute_trajectory(ghost_input, traj_cfg), predictions
 
 
-def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_speed, ghost_source):
+def build_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_speed, ghost_source):
+    """Build one interactive playback figure and wire up its widgets.
+
+    Does NOT call plt.show() — returns a tuple of objects that must be kept
+    alive for the figure's slider/button/timer callbacks to keep working
+    (matplotlib garbage-collects widgets with no remaining references). The
+    caller collects these across all figures and calls plt.show() once, so
+    several val sessions can be open simultaneously.
+    """
     # ── Load & align all sources ───────────────────────────────────────────
     imu_path = _log_path(log_dir, "imu", session)
     rf_path = _log_path(log_dir, "rf", session)
@@ -527,12 +571,23 @@ def run_playback(session, log_dir, labels_cfg, start_arg, end_arg, playback_spee
     play_button.on_clicked(toggle_play)
 
     fig.suptitle(f"Session {session}", fontsize=11)
-    plt.show()
+
+    # Return every object the figure's callbacks close over. The slider and
+    # button hold the update/play callbacks; those closures reach `state`
+    # (and its timer). Keeping this tuple alive keeps the figure interactive.
+    return fig, slider, play_button, state
 
 
 def main():
     ap = argparse.ArgumentParser(description="Interactive kayak session playback.")
-    ap.add_argument("config", type=Path, help="Path to YAML plot config.")
+    ap.add_argument("config", type=Path, nargs="?", default=None,
+                    help="Path to YAML plot config for a specific session. "
+                         "Omit to auto-plot the validation sessions recorded in "
+                         "the checkpoint metadata (see --model).")
+    ap.add_argument("--model", choices=MODEL_TYPES, default="turn",
+                    help="In auto mode (no config given), which model's "
+                         "checkpoint metadata to read val sessions from. "
+                         "Default 'turn'.")
     ap.add_argument("--start", default=None,
                     help="Start of playback window. HH:MM:SS or seconds-from-start.")
     ap.add_argument("--end", default=None,
@@ -546,8 +601,27 @@ def main():
                          "'off' hides them.")
     args = ap.parse_args()
 
-    session, log_dir, labels_cfg = _load_yaml(args.config)
-    run_playback(session, log_dir, labels_cfg, args.start, args.end, args.speed, args.ghost)
+    if args.config is not None:
+        # Override: plot exactly the session named in the YAML config.
+        sessions = [_load_yaml(args.config)]
+    else:
+        # Auto: plot every validation session from the model's checkpoint meta,
+        # each in its own window (opened together by the single plt.show below).
+        sessions = _load_val_sessions(args.model)
+        print(f"[auto] plotting {len(sessions)} {args.model} validation "
+              f"session(s) from checkpoint metadata:")
+        for name, _, _ in sessions:
+            print(f"    {name}")
+
+    # Keep every figure's widgets referenced until the windows close, then show
+    # them all at once so multiple val sessions are on screen simultaneously.
+    keepalive = [
+        build_playback(session, log_dir, labels_cfg,
+                       args.start, args.end, args.speed, args.ghost)
+        for session, log_dir, labels_cfg in sessions
+    ]
+    if keepalive:
+        plt.show()
 
 
 if __name__ == "__main__":

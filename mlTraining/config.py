@@ -41,8 +41,8 @@ LABEL_TURN_WINDOW_MS = 2000      # longer integration window for smoother turn t
 
 # Divisors that bring labels into roughly unit scale before training.
 # Start at 1.0; once you have data, replace with ~95th percentile of |label|.
-LABEL_ASSIST_NORM_SCALE = 0.383     # recomputed 7-14-26, idle-gated, over Ongoing_Training_Sessions (6 sessions, 61034 samples)
-LABEL_TURN_NORM_SCALE = 0.122       # recomputed 7-14-26, idle-gated (new sessions have far more turning than 7-4 corpus)
+LABEL_ASSIST_NORM_SCALE = 0.378     # recomputed 7-14-26, idle-gated, over Ongoing_Training_Sessions (6 sessions, 61034 samples)
+LABEL_TURN_NORM_SCALE = 0.107       # recomputed 7-14-26, idle-gated (new sessions have far more turning than 7-4 corpus)
 
 # ── Paddle input windows (per-model) ──────────────────────────────────────
 # Each model gets a fixed window of paddle IMU history at every prediction.
@@ -135,7 +135,7 @@ WEIGHT_DECAY = 1e-4
 # More epochs = more chances to learn, but too many = overfitting.
 # We save the best model (lowest validation loss) so extra epochs are safe.
 EPOCHS = 50
-VAL_SPLIT = 0.2              # 20% of *files* held out for validation
+VAL_SPLIT = 0.3              # 30% of *files* held out for validation
 DROPOUT = 0.3                # Fraction of neurons randomly disabled during
                              # training to prevent overfitting
 RANDOM_SEED = 42

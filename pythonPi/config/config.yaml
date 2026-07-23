@@ -53,8 +53,8 @@ motorManager:
     deadbandRpm: 725                # 750 RPM held between strokes (keeps motor spinning) - 300 for testing
     assistMaxRpm: 1420              # 1300 RPM added on top of deadband at full assist (clamped prediction = 1.0) - 200 for testing
     assistGain: 1.2                 # Tuning gain on the assist prediction before clamping to [0, 1]
-    rampUpTauInSeconds: 0.1          # RC filter tau when target RPM is rising
-    rampDownTauInSeconds: 0.125        # RC filter tau when target RPM is falling ("sustain vs pulse" decay knob)
+    rampUpTauInSeconds: 0.13          # RC filter tau when target RPM is rising
+    rampDownTauInSeconds: 0.13        # RC filter tau when target RPM is falling ("sustain vs pulse" decay knob)
   finController:
     controlRateInMilliseconds: 100
     pitchDeadbandDeg: 12.0

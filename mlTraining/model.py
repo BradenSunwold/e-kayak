@@ -24,6 +24,7 @@ from config import (
     MODEL_TYPE_ASSIST,
     MODEL_TYPE_TURN,
     NUM_CHANNELS,
+    TURN_CNN_CHANNELS,
     WINDOW_SIZE_ASSIST,
     WINDOW_SIZE_TURN,
 )
@@ -86,58 +87,61 @@ class TurnCNN(nn.Module):
     Input:  (batch, 6 channels, 40 samples)  — 2 s of paddle IMU @ 20 Hz
     Output: (batch,)                          — single scalar per window
 
-    Layer-by-layer shapes:
-        Conv1d(6 → 32, k=5, pad=2) → BN → ReLU → MaxPool(2)    (batch, 32, 20)
+    Layer-by-layer shapes, with (c1, c2, c3) = TURN_CNN_CHANNELS:
+        Conv1d(6 → c1, k=5, pad=2) → BN → ReLU → MaxPool(2)    (batch, c1, 20)
             first layer learns simple patterns (spikes, slopes, oscillations)
 
-        Conv1d(32 → 64, k=5, pad=2) → BN → ReLU → MaxPool(2)   (batch, 64, 10)
+        Conv1d(c1 → c2, k=5, pad=2) → BN → ReLU → MaxPool(2)   (batch, c2, 10)
             combines simple patterns into stroke-shaped features
 
-        Conv1d(64 → 128, k=3, pad=1) → BN → ReLU → AdaptiveAvgPool(1)
-                                                                (batch, 128, 1)
+        Conv1d(c2 → c3, k=3, pad=1) → BN → ReLU → AdaptiveAvgPool(1)
+                                                                (batch, c3, 1)
             higher-level patterns, then collapse time to one feature vector
 
-        squeeze → Dropout → Linear(128 → 1)                     (batch, 1)
+        squeeze → Dropout → Linear(c3 → 1)                      (batch, 1)
         squeeze last dim                                        (batch,)
 
-    Same conv backbone as the previous binary classifier (so the gains
-    from prior tuning carry over); only the head changes from
-    Linear(128, num_classes) to Linear(128, 1).
-
-    ~75K parameters.
+    Channel widths come from config.TURN_CNN_CHANNELS so capacity can be swept
+    without editing this file — see that constant for why. The layout is
+    unchanged from the original (32, 64, 128) backbone inherited from the
+    binary classifier; only the widths are tunable.
     """
 
-    def __init__(self):
+    def __init__(self, channels: tuple[int, int, int] = TURN_CNN_CHANNELS):
         super().__init__()
+        if len(channels) != 3:
+            raise ValueError(
+                f"TurnCNN expects exactly 3 conv channel widths, got {channels!r}")
+        c1, c2, c3 = channels
         self.block1 = nn.Sequential(
-            nn.Conv1d(NUM_CHANNELS, 32, kernel_size=5, padding=2),
-            nn.BatchNorm1d(32),
+            nn.Conv1d(NUM_CHANNELS, c1, kernel_size=5, padding=2),
+            nn.BatchNorm1d(c1),
             nn.ReLU(),
             nn.MaxPool1d(2),       # 40 → 20
         )
         self.block2 = nn.Sequential(
-            nn.Conv1d(32, 64, kernel_size=5, padding=2),
-            nn.BatchNorm1d(64),
+            nn.Conv1d(c1, c2, kernel_size=5, padding=2),
+            nn.BatchNorm1d(c2),
             nn.ReLU(),
             nn.MaxPool1d(2),       # 20 → 10
         )
         self.block3 = nn.Sequential(
-            nn.Conv1d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm1d(128),
+            nn.Conv1d(c2, c3, kernel_size=3, padding=1),
+            nn.BatchNorm1d(c3),
             nn.ReLU(),
             nn.AdaptiveAvgPool1d(1),   # 10 → 1
         )
         self.head = nn.Sequential(
             nn.Dropout(DROPOUT),
-            nn.Linear(128, 1),
+            nn.Linear(c3, 1),
         )
 
     def forward(self, x):
         # x: (batch, 6, 40)
-        x = self.block1(x)         # (batch, 32, 20)
-        x = self.block2(x)         # (batch, 64, 10)
-        x = self.block3(x)         # (batch, 128, 1)
-        x = x.squeeze(-1)          # (batch, 128)
+        x = self.block1(x)         # (batch, c1, 20)
+        x = self.block2(x)         # (batch, c2, 10)
+        x = self.block3(x)         # (batch, c3, 1)
+        x = x.squeeze(-1)          # (batch, c3)
         x = self.head(x)           # (batch, 1)
         return x.squeeze(-1)       # (batch,) — match label tensor shape
 

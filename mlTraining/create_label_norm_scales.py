@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config import LABEL_TURN_NORM_SCALE
 from dataset import _ALIGNMENT_TOLERANCE
 from idle_gate import GYRO_COLUMNS, compute_idle_mask
 from plotters.labels import LabelConfig, compute_labels
@@ -161,6 +162,20 @@ def main():
     print("\nSuggested config.py update:")
     print(f"  LABEL_ASSIST_NORM_SCALE = {overall_assist_p95:.3f}")
     print(f"  LABEL_TURN_NORM_SCALE   = {overall_turn_p95:.3f}")
+
+    # The turn deadband is specified in physical degrees
+    # (LABEL_BLEND_BOAT_TURN_*_DEG) and converts to normalized units off the
+    # turn norm scale automatically, so a scale change alone keeps it fixed in
+    # degrees — no manual retune needed for renormalization. But if THIS run's
+    # numbers moved because the corpus itself changed (new conditions, more
+    # turning), the straight-vs-turning split those degrees encode may have
+    # shifted too — re-run analyze_turn_distribution.py to reassess them.
+    if abs(overall_turn_p95 - LABEL_TURN_NORM_SCALE) > 1e-3:
+        print(f"\n[note] turn norm scale would change "
+              f"{LABEL_TURN_NORM_SCALE:.3f} -> {overall_turn_p95:.3f}. The "
+              f"deadband stays fixed in degrees automatically, but if the "
+              f"corpus changed, re-run analyze_turn_distribution.py to "
+              f"reassess LABEL_BLEND_BOAT_TURN_*_DEG.")
 
 
 if __name__ == "__main__":

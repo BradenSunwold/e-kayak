@@ -29,8 +29,10 @@ from config import (
     IDLE_GATE_ENTER_THRESHOLD,
     IDLE_GATE_EXIT_THRESHOLD,
     IDLE_GATE_WINDOW_S,
-    LABEL_BLEND_ENERGY_HIGH,
-    LABEL_BLEND_ENERGY_LOW,
+    LABEL_BLEND_BOAT_TURN_HIGH,
+    LABEL_BLEND_BOAT_TURN_LOW,
+    LABEL_BLEND_PADDLE_ENERGY_HIGH,
+    LABEL_BLEND_PADDLE_ENERGY_LOW,
     SAMPLE_RATE_HZ,
 )
 
@@ -82,12 +84,13 @@ def compute_label_blend_weights(gyro_xyz: np.ndarray,
                                 sample_rate_hz: float = SAMPLE_RATE_HZ
                                 ) -> np.ndarray:
     """Per-sample weight in [0, 1] that scales training labels toward zero
-    as paddle motion energy falls (see config.py "Idle label blending").
+    as paddle motion energy falls (see config.py "Paddle-energy label
+    blending"). Applies to both the assist and turn labels.
 
     Training-only — the runtime gate on the Pi stays the binary hysteresis
     state machine above. Unlike the gate, this is a memoryless function of
-    the current energy value: smoothstep from 0 at LABEL_BLEND_ENERGY_LOW
-    to 1 at LABEL_BLEND_ENERGY_HIGH. Smoothstep (a²(3-2a)) rather than a
+    the current energy value: smoothstep from 0 at LABEL_BLEND_PADDLE_ENERGY_LOW
+    to 1 at LABEL_BLEND_PADDLE_ENERGY_HIGH. Smoothstep (a²(3-2a)) rather than a
     linear ramp so the label-vs-energy curve has no slope discontinuities
     at the two thresholds — a smooth target is easier for the network to
     represent than one with corners.
@@ -96,7 +99,32 @@ def compute_label_blend_weights(gyro_xyz: np.ndarray,
     weight 0, matching the gate's "incomplete window counts as idle" rule.
     """
     energy = paddle_motion_energy(gyro_xyz, sample_rate_hz)
-    a = ((energy - LABEL_BLEND_ENERGY_LOW)
-         / (LABEL_BLEND_ENERGY_HIGH - LABEL_BLEND_ENERGY_LOW))
+    a = ((energy - LABEL_BLEND_PADDLE_ENERGY_LOW)
+         / (LABEL_BLEND_PADDLE_ENERGY_HIGH - LABEL_BLEND_PADDLE_ENERGY_LOW))
     a = np.clip(np.nan_to_num(a, nan=0.0), 0.0, 1.0)
+    return a * a * (3.0 - 2.0 * a)
+
+
+def compute_turn_deadband_weights(turn_label: np.ndarray) -> np.ndarray:
+    """Per-sample weight in [0, 1] that blends the turn label toward zero for
+    small boat rotations (see config.py "Boat-turn label blending").
+
+    Training-only, turn model only. Smoothstep on |turn_label|: 0 at or below
+    LABEL_BLEND_BOAT_TURN_LOW, 1 at or above LABEL_BLEND_BOAT_TURN_HIGH, smooth
+    between — so straight-line wobble is zeroed and real turns pass through,
+    with no slope discontinuity for the network to fit around. Same smoothstep
+    shape as compute_label_blend_weights, keyed on the label magnitude (boat
+    yaw) instead of paddle motion energy.
+
+    NaN labels (end-of-session future window) propagate to NaN weight so the
+    caller's validity check still drops them — unlike the paddle-energy blend,
+    a NaN turn label is not known to be zero. If HIGH <= LOW the deadband is
+    disabled and every finite label gets weight 1.
+    """
+    absv = np.abs(np.asarray(turn_label, dtype=float))
+    if LABEL_BLEND_BOAT_TURN_HIGH <= LABEL_BLEND_BOAT_TURN_LOW:
+        return np.ones_like(absv)
+    a = ((absv - LABEL_BLEND_BOAT_TURN_LOW)
+         / (LABEL_BLEND_BOAT_TURN_HIGH - LABEL_BLEND_BOAT_TURN_LOW))
+    a = np.clip(a, 0.0, 1.0)
     return a * a * (3.0 - 2.0 * a)

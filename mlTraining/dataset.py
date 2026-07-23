@@ -43,7 +43,12 @@ from config import (
     WINDOW_SIZE_ASSIST,
     WINDOW_SIZE_TURN,
 )
-from idle_gate import GYRO_COLUMNS, compute_idle_mask, compute_label_blend_weights
+from idle_gate import (
+    GYRO_COLUMNS,
+    compute_idle_mask,
+    compute_label_blend_weights,
+    compute_turn_deadband_weights,
+)
 from plotters.labels import LabelConfig, compute_labels
 from plotters.parsers import parse_imu_log, parse_motor_log, parse_rf_log
 
@@ -271,12 +276,23 @@ class SessionDataset(Dataset):
         # attenuated NaN labels in the transition band stay NaN so the
         # validity check below still drops them.
         blend_weights = None
+        turn_dead_weights = None
         if idle_mode == "blend":
             blend_weights = compute_label_blend_weights(
                 aligned[GYRO_COLUMNS].to_numpy(dtype=float))
+            # Turn model only: also blend small boat rotations toward zero so
+            # the fin doesn't chatter on straight-line wobble and the model
+            # isn't fed low-amplitude near-noise to memorize. Keyed on the raw
+            # turn label magnitude (before this reassignment) and multiplied
+            # into the paddle-energy weight, so a sample survives only where
+            # the paddle is moving AND the boat is genuinely turning.
+            label_weights = blend_weights
+            if self.model_type == MODEL_TYPE_TURN:
+                turn_dead_weights = compute_turn_deadband_weights(self.targets)
+                label_weights = blend_weights * turn_dead_weights
             self.targets = np.where(
                 blend_weights == 0.0, 0.0,
-                blend_weights * self.targets).astype(np.float32)
+                label_weights * self.targets).astype(np.float32)
 
         # ── Find valid sample indices ─────────────────────────────────────
         # A sample at index i is valid if:
@@ -321,6 +337,17 @@ class SessionDataset(Dataset):
                   f"samples, {n_zero} zero-labeled (paddle idle), "
                   f"{n_partial} attenuated (transition band), "
                   f"{n_full} full-label (active paddling)")
+            # Turn-deadband effect, counted among samples the paddle-energy
+            # blend did NOT already zero — otherwise the two would double-count.
+            if turn_dead_weights is not None:
+                active = w > 0.0
+                dw = turn_dead_weights[valid]
+                d_zero = int((active & (dw == 0.0)).sum())
+                d_partial = int((active & (dw > 0.0) & (dw < 1.0)).sum())
+                print(f"[turn-deadband] {meta.log_dir.name}/{meta.name}: of "
+                      f"{int(active.sum())} paddle-active samples, {d_zero} "
+                      f"zeroed (boat below turn deadband), {d_partial} "
+                      f"attenuated (turn transition band)")
 
         # Apply optional sub-slice (used by --single-session-split).
         lo_frac, hi_frac = sample_fraction_range

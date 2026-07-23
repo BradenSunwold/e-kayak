@@ -35,9 +35,13 @@ from config import (
     CHECKPOINT_DIR,
     DIRECTION_ACCURACY_THRESHOLD,
     EPOCHS,
+    LABEL_BLEND_BOAT_TURN_HIGH,
+    LABEL_BLEND_BOAT_TURN_LOW,
     LEARNING_RATE,
+    MODEL_TYPE_TURN,
     MODEL_TYPES,
     RANDOM_SEED,
+    TURN_CNN_CHANNELS,
     VAL_SPLIT,
     WEIGHT_DECAY,
 )
@@ -178,6 +182,12 @@ def save_metadata(path: Path,
     metadata = {
         "model_type": model_type,
         "input_window_size": input_window_size(model_type),
+        # Architecture capacity knob — recorded so a checkpoint's widths are
+        # identifiable later. TURN_CNN_CHANNELS is being swept against the turn
+        # model's overfitting, so a .pt from one setting will not load into
+        # another; this is what tells you which one you're holding.
+        **({"turn_cnn_channels": list(TURN_CNN_CHANNELS)}
+           if model_type == MODEL_TYPE_TURN else {}),
         "label_config": dataclasses.asdict(label_config),
         "split_info": split_info,
         "train_sessions": [
@@ -294,14 +304,23 @@ def main():
     paths = _checkpoint_paths(args.model)
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     save_norm_stats(paths["norm_stats"], means, stds)
+    split_info = {
+        "filter_training_mode_only": not args.all_modes,
+        "idle_mode": args.idle_mode,
+        "single_session_split": args.single_session_split,
+        "val_split": args.val_split,
+    }
+    # Provenance: record the boat-turn deadband the turn labels were blended
+    # with (turn model only, and only when blending is active). Mirrors the
+    # ONNX sidecar's label_blend block — the value used at train time, so a
+    # later config change is detectable against what this checkpoint saw.
+    if args.model == MODEL_TYPE_TURN and args.idle_mode == "blend":
+        split_info["boat_turn_deadband"] = {
+            "low": LABEL_BLEND_BOAT_TURN_LOW,
+            "high": LABEL_BLEND_BOAT_TURN_HIGH,
+        }
     save_metadata(paths["metadata"], args.model, label_config,
-                  train_sessions, val_sessions,
-                  split_info={
-                      "filter_training_mode_only": not args.all_modes,
-                      "idle_mode": args.idle_mode,
-                      "single_session_split": args.single_session_split,
-                      "val_split": args.val_split,
-                  })
+                  train_sessions, val_sessions, split_info=split_info)
 
     # ── Training loop ──────────────────────────────────────────────────────
     best_val_loss = float("inf")

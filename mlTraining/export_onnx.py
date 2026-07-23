@@ -40,9 +40,12 @@ from config import (
     IDLE_GATE_ENTER_THRESHOLD,
     IDLE_GATE_EXIT_THRESHOLD,
     IDLE_GATE_WINDOW_S,
-    LABEL_BLEND_ENERGY_HIGH,
-    LABEL_BLEND_ENERGY_LOW,
+    LABEL_BLEND_BOAT_TURN_HIGH,
+    LABEL_BLEND_BOAT_TURN_LOW,
+    LABEL_BLEND_PADDLE_ENERGY_HIGH,
+    LABEL_BLEND_PADDLE_ENERGY_LOW,
     MODEL_TYPE_ASSIST,
+    MODEL_TYPE_TURN,
     MODEL_TYPES,
     NUM_CHANNELS,
     SAMPLE_RATE_HZ,
@@ -175,12 +178,17 @@ def main():
             "exit_threshold": IDLE_GATE_EXIT_THRESHOLD,
         },
         # Training-only, recorded for provenance — the Pi does not act on
-        # these. Labels were scaled toward zero by smoothstep of paddle
-        # motion energy across this band; changing them requires a retrain
-        # to take effect (see config.py "Idle label blending").
+        # these. Labels were scaled toward zero by smoothstep blends; changing
+        # them requires a retrain to take effect. The paddle-energy blend
+        # (config.py "Paddle-energy label blending") applies to every model;
+        # the boat-turn deadband ("Boat-turn label blending") applies only to
+        # the turn model, so it is recorded only there.
         "label_blend": {
-            "energy_low": LABEL_BLEND_ENERGY_LOW,
-            "energy_high": LABEL_BLEND_ENERGY_HIGH,
+            "paddle_energy_low": LABEL_BLEND_PADDLE_ENERGY_LOW,
+            "paddle_energy_high": LABEL_BLEND_PADDLE_ENERGY_HIGH,
+            **({"boat_turn_low": LABEL_BLEND_BOAT_TURN_LOW,
+                "boat_turn_high": LABEL_BLEND_BOAT_TURN_HIGH}
+               if args.model == MODEL_TYPE_TURN else {}),
         },
         "checkpoint_epoch": int(checkpoint["epoch"]),
         "checkpoint_validation_loss": float(checkpoint["val_loss"]),

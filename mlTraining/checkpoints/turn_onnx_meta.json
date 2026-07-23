@@ -31,11 +31,13 @@
     "exit_threshold": 0.5
   },
   "label_blend": {
-    "energy_low": 0.3,
-    "energy_high": 0.7
+    "paddle_energy_low": 0.3,
+    "paddle_energy_high": 0.7,
+    "boat_turn_low": 0.14680339502756043,
+    "boat_turn_high": 0.4485659292508791
   },
-  "checkpoint_epoch": 5,
-  "checkpoint_validation_loss": 0.07062960635226187,
-  "checkpoint_validation_mae": 0.24954648315906525,
-  "checkpoint_validation_r2": 0.29022756511266046
+  "checkpoint_epoch": 4,
+  "checkpoint_validation_loss": 0.06341387521261081,
+  "checkpoint_validation_mae": 0.22613702714443207,
+  "checkpoint_validation_r2": 0.3250277028789871
 }

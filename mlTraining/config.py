@@ -5,6 +5,7 @@ All constants live here so they're easy to find and change in one place.
 When you move to Phase 2 (left/right/no_stroke), you'll just update LABEL_MAP here.
 """
 
+import math
 from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────────
@@ -80,10 +81,12 @@ IDLE_GATE_WINDOW_S = 2.0
 IDLE_GATE_ENTER_THRESHOLD = 0.3
 IDLE_GATE_EXIT_THRESHOLD = 0.5
 
-# ── Idle label blending (training only) ───────────────────────────────────
-# Instead of dropping paddle-idle samples from training, keep them and blend
-# their labels toward zero based on paddle motion energy (same rolling-std
-# signal the idle gate uses):
+# ── Paddle-energy label blending (training only) ──────────────────────────
+# The first of two label blends (see also the boat-turn deadband below); this
+# one keys on paddle motion energy and applies to BOTH the assist and turn
+# labels. Instead of dropping paddle-idle samples from training, keep them and
+# blend their labels toward zero based on paddle motion energy (same
+# rolling-std signal the idle gate uses):
 #   energy <= LOW            → label forced to 0 (paddle is idle; the correct
 #                              assist is zero, and the IMU-derived label is
 #                              pure wind/current/coast-down noise anyway)
@@ -99,8 +102,42 @@ IDLE_GATE_EXIT_THRESHOLD = 0.5
 # deliberately attenuated — light paddling gets light assist — and the band
 # is also where kayak-IMU labels are least trustworthy (low signal-to-noise),
 # so attenuation doubles as label-noise suppression.
-LABEL_BLEND_ENERGY_LOW = IDLE_GATE_ENTER_THRESHOLD
-LABEL_BLEND_ENERGY_HIGH = 0.7
+LABEL_BLEND_PADDLE_ENERGY_LOW = IDLE_GATE_ENTER_THRESHOLD
+LABEL_BLEND_PADDLE_ENERGY_HIGH = 0.7
+
+# ── Boat-turn label blending (training only, turn model) ───────────────────
+# Blend small turn labels toward zero so the fin commits only on real turns
+# instead of chattering on the residual sustained yaw that straight paddling
+# leaves behind (which also gives a big turn model near-noise to memorize —
+# the 7-20-26 overfitting run):
+#   |turn_label| <= LOW   → forced to 0 (boat effectively straight)
+#   |turn_label| >= HIGH  → yaw-rate label trusted fully (a real turn)
+#   between            → smoothstep taper
+# Turn model only, "blend" idle mode only. Set HIGH <= LOW to disable.
+#
+# Specified in PHYSICAL units — degrees of heading change over the label
+# window — because that is the interpretable "is this a real turn?" quantity
+# and it stays fixed no matter how the label is normalized. The turn label is
+# the future-window mean of yaw rate, so |label| * norm_scale * window = the
+# rotation over the window; the two thresholds are converted from degrees back
+# to the normalized units the weight function uses via that same relation, so
+# they track LABEL_TURN_NORM_SCALE automatically (no hard-coded scale here).
+#
+# Values come from the corpus turn distribution (analyze_turn_distribution.py):
+# on calm/straight sessions (the 7-04 corpus) heading change per window runs
+# ~1.8 deg median and ~5.5 deg at p95, so LOW is the straight-paddling median
+# and HIGH sits just above its p95 — ordinary wobble is zeroed, clear turns
+# pass. Re-run that script to reassess these if the corpus changes.
+LABEL_BLEND_BOAT_TURN_LOW_DEG = 1.8    # straight-paddling median heading change / window
+LABEL_BLEND_BOAT_TURN_HIGH_DEG = 5.5   # just above calm-session p95
+
+# Derived: convert deg-of-heading-change-per-window into normalized label
+# units. deg = norm * norm_scale(rad/s) * window(s) * 180/pi, so invert it.
+_TURN_DEG_PER_NORM_UNIT = (LABEL_TURN_NORM_SCALE
+                           * (LABEL_TURN_WINDOW_MS / 1000.0)
+                           * 180.0 / math.pi)
+LABEL_BLEND_BOAT_TURN_LOW = LABEL_BLEND_BOAT_TURN_LOW_DEG / _TURN_DEG_PER_NORM_UNIT
+LABEL_BLEND_BOAT_TURN_HIGH = LABEL_BLEND_BOAT_TURN_HIGH_DEG / _TURN_DEG_PER_NORM_UNIT
 
 # Model identifiers. Used as the string passed to build_model() and as the
 # key for selecting which label column a SessionDataset returns.
@@ -138,4 +175,16 @@ EPOCHS = 50
 VAL_SPLIT = 0.3              # 30% of *files* held out for validation
 DROPOUT = 0.3                # Fraction of neurons randomly disabled during
                              # training to prevent overfitting
+
+# TurnCNN conv-block channel widths (the three Conv1d output channel counts).
+# The turn model overfits — 2 s × 6-channel windows give a big net lots of room
+# to memorize the low-amplitude residual the boat-turn deadband didn't zero. So
+# this is the capacity knob for the overfitting fight, exposed here to sweep
+# without touching model.py. Original was (32, 64, 128) ≈ 36.5k params; (16, 32,
+# 64) ≈ 10k roughly quarters that while staying well above the ~2.5k assist net
+# (turn is the harder pattern problem — reads left/right stroke asymmetry — so
+# it should stay bigger than assist). Assist widths are left hard-coded in
+# model.py; only the turn net is being tuned for capacity right now.
+TURN_CNN_CHANNELS = (16, 32, 64)
+
 RANDOM_SEED = 42

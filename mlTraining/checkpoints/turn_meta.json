@@ -1,6 +1,11 @@
 {
   "model_type": "turn",
   "input_window_size": 40,
+  "turn_cnn_channels": [
+    16,
+    32,
+    64
+  ],
   "label_config": {
     "assist_delay_ms": 100,
     "turn_delay_ms": 200,
@@ -15,7 +20,11 @@
     "filter_training_mode_only": true,
     "idle_mode": "blend",
     "single_session_split": false,
-    "val_split": 0.3
+    "val_split": 0.3,
+    "boat_turn_deadband": {
+      "low": 0.14680339502756043,
+      "high": 0.4485659292508791
+    }
   },
   "train_sessions": [
     {

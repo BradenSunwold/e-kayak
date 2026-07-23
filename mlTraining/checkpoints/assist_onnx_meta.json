@@ -31,8 +31,8 @@
     "exit_threshold": 0.5
   },
   "label_blend": {
-    "energy_low": 0.3,
-    "energy_high": 0.7
+    "paddle_energy_low": 0.3,
+    "paddle_energy_high": 0.7
   },
   "checkpoint_epoch": 80,
   "checkpoint_validation_loss": 0.028479878577483155,
